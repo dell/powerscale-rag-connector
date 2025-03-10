@@ -97,9 +97,9 @@ Check out the [examples directory](./examples) for complete usage examples:
 
 The connector consists of several modules:
 
-- [PowerScalePathLoader](https://github.com/dell/powerscale-rag-connector/blob/main/src/PowerScalePathLoader.py): Core module for identifying changed files
-- [PowerScaleDocumentLoader](https://github.com/dell/powerscale-rag-connector/blob/main/src/PowerScaleDocumentLoader.py): Custom DocumentLoader for LangChain integration
-- [PowerScaleUnstructuredLoader](https://github.com/dell/powerscale-rag-connector/blob/main/src/PowerScaleUnstructuredLoader.py): Custom Loader returning Documents processed by LangChain's UnstructuredFileLoader
+- [PowerScalePathLoader](./src/PowerScalePathLoader.py): Core module for identifying changed files
+- [PowerScaleDocumentLoader](./src/PowerScaleDocumentLoader.py): Custom DocumentLoader for LangChain integration
+- [PowerScaleUnstructuredLoader](./src/PowerScaleUnstructuredLoader.py): Custom Loader returning Documents processed by LangChain's UnstructuredFileLoader
 
 ## Requirements
 
