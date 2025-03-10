@@ -88,10 +88,10 @@ changed_files = loader.lazy_load()
 
 ## Examples
 
-Check out the [examples directory](https://github.com/dell/powerscale-rag-connector/blob/main/examples) for complete usage examples:
+Check out the [examples directory](./examples) for complete usage examples:
 
-- [test Environment Configuration](https://github.com/dell/powerscale-rag-connector/blob/main/examples/config.py.example)
-- [PowerScale NVIngest Integration](https://github.com/dell/powerscale-rag-connector/blob/main/examples/powerscale_nvingest_example.py)
+- [test Environment Configuration](./examples/config.py.example)
+- [PowerScale NVIngest Integration](./examples/powerscale_nvingest_example.py)
 
 ## Components
 
