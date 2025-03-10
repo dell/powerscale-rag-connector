@@ -1,18 +1,19 @@
-# For the powerscale_nvingest_example.py example, you'll need to install the NVIDIA Ingest client library.
-# This code has been developed and tested with nv-ingest v24.12.1.
-#
-# To install the NVIDIA Ingest client library:
-#
-#   git clone https://github.com/NVIDIA/nv-ingest.git
-#   cd nv-ingest
-#   git checkout tags/24.12.1
-#   cd [POWERSCALE_REG_CONNECTOR_REPO_ROOT]/public/examples
-#   pip install -r [NVIDIA_INGEST_REPO_ROOT]/client/requirements.txt
-#   pip install [NVIDIA_INGEST_REPO_ROOT]/client
-#
-# For more detailed information about the NVIDIA Ingest client library, refer to the official NVIDIA NV-Ingest
-# client documentation at https://github.com/NVIDIA/nv-ingest/tree/main/client
-#
+#!/usr/bin/env python3
+"""
+For the powerscale_nvingest_example.py example, you'll need to install the NVIDIA Ingest client library.
+This code has been developed and tested with nv-ingest v24.12.1.
+
+To install the NVIDIA Ingest client library:
+
+  git clone https://github.com/NVIDIA/nv-ingest.git
+  cd nv-ingest
+  git checkout tags/24.12.1
+  cd [POWERSCALE_REG_CONNECTOR_REPO_ROOT]/public/examples
+  pip install -r [NVIDIA_INGEST_REPO_ROOT]/client/requirements.txt
+  pip install [NVIDIA_INGEST_REPO_ROOT]/client
+For more detailed information about the NVIDIA Ingest client library, refer to the official NVIDIA NV-Ingest
+client documentation at https://github.com/NVIDIA/nv-ingest/tree/main/client
+"""
 
 import logging
 import sys
