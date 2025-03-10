@@ -1,0 +1,27 @@
+"""
+Configuration settings for NVIngest Powerscale Loader examples.
+Edit this file to match your environment.
+"""
+
+# Nvidia NeMo Services settings
+NEMO_ENDPOINT = "localhost"  # NVIDIA Ingest Rest Endpoint host
+NEMO_PORT = 7670  # NVIDIA Ingest Rest port
+
+# PowerScale connection settings
+ES_HOST_URL = "https://your-elasticsearch-host:9200"  # Elasticsearch host URL
+ES_INDEX_NAME = "your-index-name"  # Elasticsearch index name
+ES_API_KEY = "your-api-key"  # Elasticsearch API key (encoded)
+VERIFY_SSL = True  # Verify SSL certificates for Elasticsearch
+
+#
+# File scanning settings
+#
+# The FOLDER_PATH must be an absolute path on the PowerScale cluster
+# beginning with "/ifs"; the metadata written to ElasticSearch by
+# MetadataIQ and queried by this connector uses Powerscale absolute paths
+#
+FOLDER_PATH = "/ifs/path/to/your/data"
+FORCE_SCAN = False  # Scan all files, ignoring checkpoint
+
+# Debug settings
+DEBUG_MODE = False  # Set to True for more verbose logging
