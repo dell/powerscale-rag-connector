@@ -11,6 +11,7 @@ To install the NVIDIA Ingest client library:
   cd [POWERSCALE_REG_CONNECTOR_REPO_ROOT]/public/examples
   pip install -r [NVIDIA_INGEST_REPO_ROOT]/client/requirements.txt
   pip install [NVIDIA_INGEST_REPO_ROOT]/client
+  
 For more detailed information about the NVIDIA Ingest client library, refer to the official NVIDIA NV-Ingest
 client documentation at https://github.com/NVIDIA/nv-ingest/tree/main/client
 """
