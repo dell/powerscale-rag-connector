@@ -55,7 +55,7 @@ The PowerScale RAG Connector can be used in two ways:
 ### Using as a LangChain Document Loader
 
 ```python
-from langchain.document_loaders import PowerScaleDocumentLoader
+from powerscale_rag_connector import PowerScaleDocumentLoader
 
 # Initialize the loader
 loader = PowerScaleDocumentLoader(
@@ -72,7 +72,7 @@ documents = loader.load()
 ### Using as a Standalone Path Loader
 
 ```python
-from PowerScalePathLoader import PowerScalePathLoader
+from powerscale_rag_connector import PowerScalePathLoader
 
 # Initialize the loader
 loader = PowerScalePathLoader(
