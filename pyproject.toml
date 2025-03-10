@@ -6,7 +6,9 @@ build-backend = "hatchling.build"
 name = "powerscale-rag-connector"
 version = "1.0.9"
 dependencies = [
-  "elasticsearch"
+  "elasticsearch",
+  "langchain_core",
+  "langchain_community"
 ]
 authors = [
   { name = "Adam Brenner", email = "adam.brenner@dell.com" },
