@@ -9,7 +9,7 @@ from .PowerScaleHelper import PowerScaleHelper
 
 
 class PowerScaleDocumentLoader(BaseLoader):
-    """LangChain Document Loader the uses Dell PowerScale's  MetadataIQ feature to "checkpoint" the loader and only
+    """LangChain Document Loader that uses Dell PowerScale's MetadataIQ feature to "checkpoint" the loader and only
     read files that have changed between its last run.
 
     Applications requiring more flexibility (without strict LangChain DocumentLoader API compatibility)
@@ -21,8 +21,8 @@ class PowerScaleDocumentLoader(BaseLoader):
         es_host_url: str,
         es_index_name: str,
         es_api_key: str,
-        folder_path: str | None = None,
-        dataset_name: str | None = None,
+        folder_path: Optional[str] = None,
+        dataset_name: Optional[str] = None,
         force_scan: bool = False,
         verify_ssl: bool = True,
         app_name: str = "powerscale_rag_connector",
@@ -35,7 +35,7 @@ class PowerScaleDocumentLoader(BaseLoader):
             es_index_name: name of the ElasticSearch index
             es_api_key: api_key for ElasticSearch in hashed (encoded) form
             folder_path: The starting folder path to read data files from; must begin with "/ifs"
-            dataset: The name of the MetadataIQ dataset to load. Note: dataset and folder_path are mutually exclusive
+            dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
             force_scan: Force scanning all data regardless of state
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
@@ -71,17 +71,17 @@ class PowerScaleDocumentLoader(BaseLoader):
 
     def lazy_load(self) -> Iterator[Document]:
         """Lazy load new files on current path using MetadataIQ metadata"""
-        file_generator = None
         if self.__force_scan:
             file_generator = self.__helper.get_directory_changes(snapshot_id=0)
         else:
             file_generator = self.__helper.get_directory_changes()
 
-        for file, snapshot, change_types in file_generator:
+        for file, snapshot, lin, change_types in file_generator:
             metadata = {
                 "source": str(file),
                 "snapshot": snapshot,
-                "change_types": change_types,
+                "lin": lin,
+                "change_types": change_types
             }
             logging.debug(
                 "File found=%s (snapshot: %d, changes: %s)",

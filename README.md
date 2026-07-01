@@ -2,7 +2,7 @@
 
 The PowerScale RAG Connector is an open-source Python library designed to enhance RAG application performance during data ingestion by skipping files that have already been processed. It leverages PowerScale's unique MetadataIQ capability to identify changed files within the OneFS filesystem and publish this information in an easily consumable format via ElasticSearch.
 
-Developers can integrate the PowerScale RAG Connector directly within a LangChain RAG application as a supported document loader or use it independently as a generic Python class.
+Developers can integrate the PowerScale RAG Connector directly within a LangChain RAG application as a supported document loader, a LlamaIndex RAG application as a supported reader, or use it independently as a generic Python class.
 
 ## Workflow
 
@@ -25,48 +25,121 @@ This guide is divided into two sections: setting up the environment and using th
 |------|------------|
 | RAG | Retrieval Augmented Generation. A technique used to take an off the shelf large language model and provide the LLM context to data it has no knowledge of. |
 | LangChain | LangChain is an open-source python and javascript framework used to help developers create RAG applications. |
+| LlamaIndex | LlamaIndex is an open-source Python framework for building RAG applications. |
 | Nvidia NIM Services | Part of Nvidia AI Enterprise, a set of microservices that can optional be used to efficiently chunk and embed files with GPU. The output of this data can be stored in a vector database for a RAG framework to use. |
 | NV-Ingest | An Nvidia NIM microservice that will ingest complex office documents files with tables, and figures, and produce chunks and embedding to be stored in a vector database. |
 | Chunking | The process of splitting the source file into smaller context aware pieces that can be searched and converted into vectors. Example: a chunk could be every paragraph within a large office document |
 | Embedding | Turning a chunk of data into a vector where vector operations such as similarity, can be performed. |
 | MetadataIQ | A new feature in PowerScale OneFS 9.10 that will periodically save filesystem metadata to an external database such as Elasticsearch |
-| PowerScale RAG Connector | An open-source connector that can integrate with LangChain to improve data ingestion when data resides on PowerScale. |
+| lin | Logical inode number. A unique and stable identifier for a file on PowerScale OneFS, used to track file versions across renames and modifications. |
+| PowerScale RAG Connector | An open-source connector that integrates with LangChain or LlamaIndex to improve data ingestion when data resides on PowerScale. |
 
 ## Installation
 
+### Basic installation
 ```bash
 pip install powerscale-rag-connector
 ```
 
+### Install with LangChain dependencies
+```bash
+pip install powerscale-rag-connector[langchain]
+```
+
+### Install with LlamaIndex dependencies
+```bash
+pip install powerscale-rag-connector[llamaindex]
+```
+
+### Full installation (LangChain + LlamaIndex)
+```bash
+pip install powerscale-rag-connector[all]
+```
+
 ## Installing NVIDIA Ingest Client
 
-To use the NVIDIA Ingest client with the PowerScale RAG Connector, you'll need to install the NVIDIA Ingest client library. This code has been tested with nv-ingest v24.12.1.
+The NvIngest examples use the v2 API. For more information refer to the [official NV-Ingest documentation](https://docs.nvidia.com/nemo/retriever/latest/extraction/nv-ingest-python-api/).
 
-For more detailed information about the NVIDIA Ingest client library, refer to the [official NVIDIA NV-Ingest client documentation](https://github.com/NVIDIA/nv-ingest/tree/main/client).
+```bash
+pip install nv-ingest-client
+```
 
 
 ## Usage
 
-The PowerScale RAG Connector can be used in two ways:
+The PowerScale RAG Connector can be used in three ways:
 
 1. As a LangChain document loader
-2. As a standalone Python class
+2. As a LlamaIndex reader
+3. As a standalone Python class
 
 ### Using as a LangChain Document Loader
 
 ```python
 from powerscale_rag_connector import PowerScaleDocumentLoader
 
-# Initialize the loader
 loader = PowerScaleDocumentLoader(
-    es_host_url="http://elasticsearch:9200",
-    es_index_name="metadataiq",
-    es_api_key="your-api-key",
+    es_host_url="https://elasticsearch:9200",
+    es_index_name="isi-metadataiq-index.cluster.guid",
+    es_api_key="your-encoded-api-key",
     folder_path="/ifs/data"
 )
 
-# Load documents
-documents = loader.load()
+for doc in loader.lazy_load():
+    print(doc.metadata["source"], doc.metadata["change_types"])
+```
+
+Each returned `Document` includes `source`, `snapshot`, `lin`, and `change_types` in its metadata.
+
+### Handling Modified Files
+
+The `lin` field (logical inode number) is a stable file identifier on OneFS that persists across renames and modifications. Use it to remove stale chunks from your vectorstore before re-ingesting a modified file.
+
+```python
+for doc in loader.lazy_load():
+    lin = doc.metadata["lin"]
+    source = doc.metadata["source"]
+    change_types = doc.metadata["change_types"]
+
+    if "ENTRY_MODIFIED" in change_types:
+        vectorstore.delete({"lin": lin})
+
+    chunks = process_document(source)  # your chunking/embedding logic
+    vectorstore.add(chunks, metadata={"lin": lin, "source": source})
+```
+
+### Using as a LlamaIndex Reader
+
+Two LlamaIndex readers are available. **`PowerScaleSimpleDirectoryReader`** wraps LlamaIndex's `SimpleDirectoryReader` filtered to changed files:
+
+```python
+from powerscale_rag_connector import PowerScaleSimpleDirectoryReader
+
+reader = PowerScaleSimpleDirectoryReader(
+    es_host_url="https://elasticsearch:9200",
+    es_index_name="isi-metadataiq-index.cluster.guid",
+    es_api_key="your-encoded-api-key",
+    folder_path="/ifs/data"
+)
+
+for doc in reader.lazy_load_data():
+    print(doc.metadata["source"], doc.metadata["change_types"])
+```
+
+**`PowerScaleUnstructuredReader`** wraps LlamaIndex's `UnstructuredReader` for element-level parsing:
+
+```python
+from powerscale_rag_connector import PowerScaleUnstructuredReader
+
+reader = PowerScaleUnstructuredReader(
+    es_host_url="https://elasticsearch:9200",
+    es_index_name="isi-metadataiq-index.cluster.guid",
+    es_api_key="your-encoded-api-key",
+    folder_path="/ifs/data",
+    mode="elements"
+)
+
+documents = reader.load_data()
 ```
 
 ### Using as a Standalone Path Loader
@@ -76,9 +149,9 @@ from powerscale_rag_connector import PowerScalePathLoader
 
 # Initialize the loader
 loader = PowerScalePathLoader(
-    es_host_url="http://elasticsearch:9200",
-    es_index_name="metadataiq",
-    es_api_key="your-api-key",
+    es_host_url="https://elasticsearch:9200",
+    es_index_name="isi-metadataiq-index.cluster.guid",
+    es_api_key="your-encoded-api-key",
     folder_path="/ifs/data"
 )
 
@@ -90,8 +163,15 @@ changed_files = loader.lazy_load()
 
 Check out the [examples directory](./examples) for complete usage examples:
 
-- [test Environment Configuration](./examples/config.py.example)
-- [PowerScale NVIngest Integration](./examples/powerscale_nvingest_example.py)
+- [Environment Configuration](./examples/.env.example)
+- [PowerScale LangChain Document Loader](./examples/powerscale_langchain_doc_loader.py)
+- [PowerScale LangChain Unstructured Loader](./examples/powerscale_langchain_unstructured_loader.py)
+- [PowerScale LlamaIndex Simple Directory Reader](./examples/powerscale_llamaindex_simple_directory_reader.py)
+- [PowerScale LlamaIndex Unstructured Reader](./examples/powerscale_llamaindex_unstructured_reader.py)
+- [PowerScale Path Loader](./examples/powerscale_pathloader.py)
+- [PowerScale NVIngest LangChain Document Loader](./examples/powerscale_nvingest_langchain_doc_loader.py)
+- [PowerScale NVIngest LlamaIndex Simple Directory Reader](./examples/powerscale_nvingest_llamaindex_simple_dir_reader.py)
+- [PowerScale NVIngest Path Loader](./examples/powerscale_nvingest_pathloader.py)
 
 ## Components
 
@@ -100,13 +180,17 @@ The connector consists of several modules:
 - [PowerScalePathLoader](./src/PowerScalePathLoader.py): Core module for identifying changed files
 - [PowerScaleDocumentLoader](./src/PowerScaleDocumentLoader.py): Custom DocumentLoader for LangChain integration
 - [PowerScaleUnstructuredLoader](./src/PowerScaleUnstructuredLoader.py): Custom Loader returning Documents processed by LangChain's UnstructuredFileLoader
+- [PowerScaleSimpleDirectoryReader](./src/PowerScaleSimpleDirectoryReader.py): Custom Simple Directory Reader for LlamaIndex integration
+- [PowerScaleUnstructuredReader](./src/PowerScaleUnstructuredReader.py): Custom Loader returning Documents processed by LlamaIndex's UnstructuredReader
+
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - Elasticsearch client
 - PowerScale OneFS 9.10+ with MetadataIQ configured
 - LangChain (optional, for LangChain integration)
+- LlamaIndex (optional, for LlamaIndex integration)
 
 ## License
 

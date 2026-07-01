@@ -16,9 +16,24 @@ This directory contains python examples demonstrating how to use PowerScale RAG 
      - Elasticsearch Index name
      - Elasticsearch API key
      - SSL certificate verification for Elasticsearch (enable/disable)
-   - File scan settings (folder path, incremental/full scanning))
+   - File scan settings (folder path, incremental/full scanning)
    - Debug settings
    - _Optional:_ NVIDIA Ingest Service settings (endpoint and port) for testing with NVIngest
+
+3. **Establish PowerScale NFS Access**:
+   
+   On your Linux machine ensure NFS client library and RPC daemons are running. On Ubuntu you may need to run
+   ```
+   sudo apt-get install nfs-common
+   ```
+   Create a local directory where you will access the PowerScale cluster. This could be any directory.
+   ```
+   sudo mkdir -p /ifs
+   ```
+   Run the mount command to access the PowerScale over NFS
+   ```
+   sudo mount -t nfs <cluster>:/ifs /ifs
+   ```
 
 3. **Run an example**:
 
@@ -32,6 +47,12 @@ This directory contains python examples demonstrating how to use PowerScale RAG 
    python powerscale_langchain_unstructured_loader.py
    # or
    python powerscale_nvingest_example.py
+   # or
+   python powerscale_llamaindex_unstructured_reader.py
+   # or
+   python powerscale_llamaindex_simple_directory_reader.py
+   # or
+   python powerscale_nvingest_rag_vectorstore.py
    ```
 
 ## Available Examples
@@ -44,31 +65,77 @@ This directory contains python examples demonstrating how to use PowerScale RAG 
 
 - **powerscale_nvingest_example.py**: Demonstrates integration between PowerScale data and NVIDIA's NVIngest for text extraction, splitting, and embedding.
 
+- **powerscale_llamaindex_unstructured_reader.py**: Shows how to use PowerScaleUnstructuredReader to parse documents using LlamaIndex's UnstructuredFileReader, extracting structured elements from source documents.
+
+- **powerscale_llamaindex_simple_directory_reader.py**: Shows how to use PowerScaleSimple DirectoryReader to parse documents using LlamaIndex's SimpleDirectoryReader to create LlamaIndex Document objects with metadata from PowerScale's MetadataIQ.
+
+- **powerscale_nvingest_rag_vectorstore.py**: End-to-end RAG pipeline — uses PowerScalePathLoader to detect changed files, processes them through NvIngest v2 for text extraction and chunking, embeds chunks via a NVIDIA NIM embeddings endpoint, and stores them in a LangChain ElasticsearchStore. Handles `ENTRY_MODIFIED` by deleting old chunks (matched by PowerScale `lin`) before inserting new ones, preventing stale content from appearing in RAG search results.
+
 ## Requirements
 
 - PowerScale storage system with MetadataIQ configured
 - Elasticsearch host with MetadataIQ index
-- Python 3.8+
+- Python 3.10+
 - Required Python packages (install via pip):
   - langchain_core
   - langchain_community
   - elasticsearch
   - _For unstructured loader:_ unstructured-client or local unstructured package and tools (see powerscale_langchain_unstructured_loader.py file header for more information)
   - _For NVIngest example:_ nv-ingest-client (see installation instructions below)
+  - _For unstructured reader and simple directory reader:_ llama-index
+  - _For RAG vectorstore example:_ langchain-elasticsearch, langchain-nvidia-ai-endpoints, and a running NVIDIA NIM embeddings endpoint (see NIM setup below)
 
 ## Installing NVIDIA Ingest Client
 
-For the `powerscale_nvingest_example.py` example, you'll need to install the NVIDIA Ingest client library. This code has been tested with nv-ingest v24.12.1.
+The NvIngest examples use the v2 API. For more information refer to the
+[official NV-Ingest documentation](https://docs.nvidia.com/nemo/retriever/latest/extraction/nv-ingest-python-api/).
 
-For more detailed information about the NVIDIA Ingest client library, refer to the [official NVIDIA NV-Ingest client documentation](https://github.com/NVIDIA/nv-ingest/tree/main/client).
-
-To install the NVIDIA Ingest client library:
+To install:
 
 ```bash
-git clone https://github.com/NVIDIA/nv-ingest.git
-cd nv-ingest
-git checkout tags/24.12.1
-cd [POWERSCALE_REG_CONNECTOR_REPO_ROOT]/public/examples
-pip install -r [NVIDIA_INGEST_REPO_ROOT]/client/requirements.txt
-pip install [NVIDIA_INGEST_REPO_ROOT]/client
+pip install nv-ingest-client
+```
+
+> **Note on terminology:** This codebase refers to NVIDIA's document ingestion service as **NvIngest** throughout. Some NVIDIA documentation and older references use the name **NeMo Retriever** or **NeMo** interchangeably for the same service. These refer to the same product — see the [NeMo Retriever repository](https://github.com/NVIDIA/NeMo-Retriever) for more context.
+
+## RAG Vectorstore Example (`powerscale_nvingest_rag_vectorstore.py`)
+
+### What is NVIDIA NIM?
+
+NVIDIA NIM (Inference Microservice) is a pre-packaged AI model served in a Docker container with a built-in REST API. You start it with one command and immediately have an endpoint that accepts text and returns embedding vectors — lists of numbers that represent the semantic meaning of the text. These vectors are what get stored in the vectorstore and searched during RAG retrieval. NIM handles all model loading, GPU configuration, and serving automatically.
+
+### Additional Requirements
+
+```bash
+pip install langchain-elasticsearch langchain-nvidia-ai-endpoints
+```
+
+A running NVIDIA NIM embeddings container is required for vector generation. Refer to the [NVIDIA NIM documentation](https://docs.nvidia.com/nim/large-language-models/latest/getting-started.html) for deployment instructions.
+
+### Configuration
+
+Set the following environment variables in addition to the standard MetadataIQ settings:
+
+```bash
+# NvIngest v2
+NV_INGEST_ENDPOINT=<nvingest-host-or-ip>     # hostname or IP of the NvIngest service
+NVINGEST_PORT=7670
+
+# Vectorstore (local Elasticsearch)
+VECTORSTORE_ES_URL=http://localhost:9200
+VECTORSTORE_INDEX=rag_vectors
+
+# NVIDIA NIM embeddings
+NVIDIA_EMBEDDING_URL=http://<nim-cluster-ip>:8000   # do NOT include /v1 — added automatically
+NVIDIA_EMBEDDING_MODEL=nvidia/llama-nemotron-embed-1b-v2
+NVIDIA_API_KEY=                                      # leave blank for local NIM
+
+# Scan control
+FORCE_SCAN=false    # set true to reprocess all files, ignoring checkpoint
+```
+
+### Running
+
+```bash
+python powerscale_nvingest_rag_vectorstore.py
 ```

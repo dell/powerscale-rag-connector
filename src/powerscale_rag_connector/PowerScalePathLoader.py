@@ -9,7 +9,7 @@ from .PowerScaleHelper import PowerScaleHelper
 
 
 class PowerScalePathLoader:
-    """LangChain-style Loader the uses Dell's PowerScale MetadataIQ feature to quickly
+    """LangChain-style Loader that uses Dell's PowerScale MetadataIQ feature to quickly
     identify files that have changed since the last run.
     """
 
@@ -32,7 +32,7 @@ class PowerScalePathLoader:
             es_index_name: name of the index
             es_api_key: api_key for ElasticSearch in hashed form
             folder_path: The starting folder path to read data from
-            dataset: The name of the MetadataIQ dataset to load. Note: dataset and folder_path are mutually exclusive
+            dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
             force_scan: Force scanning all files regardless of index state
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
@@ -64,7 +64,7 @@ class PowerScalePathLoader:
             )
         return self.__pshelper
 
-    def lazy_load(self) -> Iterator[Tuple[Path, int, List[str]]]:
+    def lazy_load(self) -> Iterator[Tuple[Path, int, int, List[str]]]:
         """
         Lazy load only new files on current path using MetadataIQ metadata.
         Yields files one at a time via scroll API.
@@ -73,9 +73,9 @@ class PowerScalePathLoader:
             Iterator yielding tuples containing:
             - Path: pathlib.Path object of the file
             - snapshot: MetadataIQ snapshot number
+            - lin: OneFS logical inode number
             - change_types: List of changes (e.g. ['ENTRY_ADDED'], ['ENTRY_DELETED'])
         """
-        file_generator = None
         if self.__force_scan:
             # When force scanning, use get_directory_changes with snapshot_id=0
             file_generator = self.__helper.get_directory_changes(snapshot_id=0)
@@ -84,7 +84,7 @@ class PowerScalePathLoader:
             file_generator = self.__helper.get_directory_changes()
 
         for index, file_tuple in enumerate(file_generator):
-            filepath, snapshot, change_types = file_tuple
+            filepath, snapshot, lin, change_types = file_tuple
             logging.debug(
                 "File returned %d: %s (gen %d) changes: %s",
                 index,

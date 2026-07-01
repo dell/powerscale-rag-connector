@@ -1,15 +1,28 @@
-import logging
-from typing import Iterator, Optional
+# PowerScaleUnstructuredReader.py
 
-from langchain_core.documents import Document
-from langchain_core.document_loaders import BaseLoader
-from langchain_unstructured import UnstructuredLoader
+"""Module providing a LlamaIndex UnstructuredReader that uses Dell PowerScale MetadataIQ
+to efficiently find files that have changed.
+"""
+
+import logging
+import warnings
+from pathlib import Path
+from typing import Iterator, Optional, List
+
+# Suppress Unstructured library deprecation warnings, will be updated when the Unstructured Library or LlamaIndex is updated
+warnings.filterwarnings("ignore", message="'doc_id' is deprecated")
+
+from llama_index.core import Document
+from llama_index.core.readers.base import BaseReader
+from llama_index.readers.file import UnstructuredReader  # requires `llama-index-readers-file`
+
 from .PowerScalePathLoader import PowerScalePathLoader
 
 
-class PowerScaleUnstructuredLoader(BaseLoader):
-    """Loads files using UnstructuredFileLoader, leveraging PowerScale MetadataIQ to efficiently
-    find files that have changed.
+class PowerScaleUnstructuredReader(BaseReader):
+    """
+    Loads files via LlamaIndex's UnstructuredReader, leveraging PowerScale MetadataIQ
+    to efficiently find files that have changed.
     """
 
     def __init__(
@@ -25,15 +38,14 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
     ) -> None:
-        """Initialize with a file path.
-
+        """
         Args:
             es_host_url: URI of the ElasticSearch database incl. port (e.g. http://localhost:9200)
             es_index_name: name of the ElasticSearch index
             es_api_key: api_key for ElasticSearch in hashed (encoded) form
             folder_path: The starting folder path to read data files from; must begin with "/ifs"
             dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
-            mode: The mode to use for UnstructuredFileLoader ("single" or "elements").
+            mode: Reader mode; "single" keeps file as one doc, "elements" yields element-level docs.
             force_scan: Force scanning all data regardless of state
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
@@ -44,11 +56,14 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         self.__es_api_key = es_api_key
         self.__folder_path = folder_path
         self.__dataset_name = dataset_name
-        self.__mode = mode
+        self.__split_documents = (mode == "elements")  # map mode string to LlamaIndex split_documents flag
         self.__force_scan = force_scan
         self.__verify_ssl = verify_ssl
         self.__app_name = app_name
         self.__app_version = app_version
+
+        # LlamaIndex Unstructured reader
+        self._reader = UnstructuredReader()
 
         self.path_loader = PowerScalePathLoader(
             es_host_url=self.__es_host_url,
@@ -62,21 +77,30 @@ class PowerScaleUnstructuredLoader(BaseLoader):
             app_version=self.__app_version,
         )
 
-    def lazy_load(self) -> Iterator[Document]:
-        """Lazy load documents from the file path."""
+    def load_data(self) -> List[Document]:
+        return list(self.lazy_load_data())
+
+    def lazy_load_data(self) -> Iterator[Document]:
+        """
+        Lazily yield LlamaIndex Documents from files discovered by PowerScalePathLoader.
+        """
         for file_path, snapshot, lin, change_types in self.path_loader.lazy_load():
             try:
-                loader = UnstructuredLoader(
-                    file_path=str(file_path), mode=self.__mode
+                docs = self._reader.load_data(
+                    file=Path(str(file_path)),
+                    split_documents=self.__split_documents,
+                    languages=["en"],
                 )
-                for doc in loader.load():
-                    # ensure the source is set correctly
-                    doc.metadata["source"] = str(file_path)
-                    doc.metadata["snapshot"] = snapshot
-                    doc.metadata["lin"] = lin
-                    doc.metadata["change_types"] = change_types
-
+                for doc in docs:
+                    metadata = (doc.metadata or {})
+                    metadata["source"] = str(file_path)
+                    metadata["snapshot"] = snapshot
+                    metadata["lin"] = lin
+                    metadata["change_types"] = change_types
+                    doc.metadata = metadata
                     yield doc
             except Exception as e:
-                logging.error("Error loading file %s: %s", file_path, e)
+                logging.error("Error loading file %s (snapshot=%s, changes=%s): %s",
+                              file_path, snapshot, change_types, e)
                 continue
+
