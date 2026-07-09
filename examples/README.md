@@ -7,10 +7,10 @@ This directory contains python examples demonstrating how to use PowerScale RAG 
 1. **Copy the example configuration file**:
 
    ```bash
-   cp config.py.example config.py
+   cp .env.example .env
    ```
 
-2. **Edit the configuration values** in `config.py` to match your environment:
+2. **Edit the configuration values** in `.env` to match your environment:
    - PowerScale MetadataIQ connection settings:
      - Elasticsearch host URL
      - Elasticsearch Index name
@@ -40,36 +40,40 @@ This directory contains python examples demonstrating how to use PowerScale RAG 
    ```bash
    export PYTHONPATH=../src:$PYTHONPATH
 
-   python powerscale_pathloader_example.py
+   python powerscale_pathloader.py
    # or
    python powerscale_langchain_doc_loader.py
    # or
    python powerscale_langchain_unstructured_loader.py
    # or
-   python powerscale_nvingest_example.py
+   python powerscale_llamaindex_simple_directory_reader.py
    # or
    python powerscale_llamaindex_unstructured_reader.py
    # or
-   python powerscale_llamaindex_simple_directory_reader.py
+   python powerscale_nvingest_langchain_doc_loader.py
    # or
-   python powerscale_nvingest_rag_vectorstore.py
+   python powerscale_nvingest_llamaindex_simple_dir_reader.py
+   # or
+   python powerscale_nvingest_pathloader.py
    ```
 
 ## Available Examples
 
-- **powerscale_pathloader_example.py**: Basic example showing how to use PowerScalePathLoader to retrieve file paths and metadata from PowerScale MetadataIQ.
+- **powerscale_pathloader.py**: Basic example showing how to use PowerScalePathLoader to retrieve file paths and metadata from PowerScale MetadataIQ.
 
 - **powerscale_langchain_doc_loader.py**: Demonstrates using PowerScaleDocumentLoader to create LangChain Document objects with metadata from PowerScale's MetadataIQ.
 
 - **powerscale_langchain_unstructured_loader.py**: Shows how to use PowerScaleUnstructuredLoader to parse documents using LangChain's UnstructuredFileLoader, extracting structured elements from source documents.
 
-- **powerscale_nvingest_example.py**: Demonstrates integration between PowerScale data and NVIDIA's NVIngest for text extraction, splitting, and embedding.
+- **powerscale_llamaindex_simple_directory_reader.py**: Shows how to use PowerScaleSimpleDirectoryReader to parse documents using LlamaIndex's SimpleDirectoryReader to create LlamaIndex Document objects with metadata from PowerScale's MetadataIQ.
 
 - **powerscale_llamaindex_unstructured_reader.py**: Shows how to use PowerScaleUnstructuredReader to parse documents using LlamaIndex's UnstructuredFileReader, extracting structured elements from source documents.
 
-- **powerscale_llamaindex_simple_directory_reader.py**: Shows how to use PowerScaleSimple DirectoryReader to parse documents using LlamaIndex's SimpleDirectoryReader to create LlamaIndex Document objects with metadata from PowerScale's MetadataIQ.
+- **powerscale_nvingest_langchain_doc_loader.py**: End-to-end RAG pipeline using PowerScaleDocumentLoader — processes changed files through NvIngest v2, embeds chunks via NVIDIA NIM, and stores them in a LangChain ElasticsearchStore. Handles `ENTRY_MODIFIED` by deleting old chunks by `lin` before inserting new ones.
 
-- **powerscale_nvingest_rag_vectorstore.py**: End-to-end RAG pipeline — uses PowerScalePathLoader to detect changed files, processes them through NvIngest v2 for text extraction and chunking, embeds chunks via a NVIDIA NIM embeddings endpoint, and stores them in a LangChain ElasticsearchStore. Handles `ENTRY_MODIFIED` by deleting old chunks (matched by PowerScale `lin`) before inserting new ones, preventing stale content from appearing in RAG search results.
+- **powerscale_nvingest_llamaindex_simple_dir_reader.py**: End-to-end RAG pipeline using PowerScaleSimpleDirectoryReader — same pipeline as above using LlamaIndex.
+
+- **powerscale_nvingest_pathloader.py**: Standalone NvIngest example using PowerScalePathLoader to detect changed files and submit them to NvIngest v2 for text extraction.
 
 ## Requirements
 
@@ -119,7 +123,7 @@ Set the following environment variables in addition to the standard MetadataIQ s
 ```bash
 # NvIngest v2
 NV_INGEST_ENDPOINT=<nvingest-host-or-ip>     # hostname or IP of the NvIngest service
-NVINGEST_PORT=7670
+NV_INGEST_PORT=7670
 
 # Vectorstore (local Elasticsearch)
 VECTORSTORE_ES_URL=http://localhost:9200

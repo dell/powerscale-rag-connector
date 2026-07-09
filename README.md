@@ -119,7 +119,7 @@ reader = PowerScaleSimpleDirectoryReader(
     es_host_url="https://elasticsearch:9200",
     es_index_name="isi-metadataiq-index.cluster.guid",
     es_api_key="your-encoded-api-key",
-    folder_path="/ifs/data"
+    input_dir="/ifs/data"
 )
 
 for doc in reader.lazy_load_data():
@@ -177,11 +177,11 @@ Check out the [examples directory](./examples) for complete usage examples:
 
 The connector consists of several modules:
 
-- [PowerScalePathLoader](./src/PowerScalePathLoader.py): Core module for identifying changed files
-- [PowerScaleDocumentLoader](./src/PowerScaleDocumentLoader.py): Custom DocumentLoader for LangChain integration
-- [PowerScaleUnstructuredLoader](./src/PowerScaleUnstructuredLoader.py): Custom Loader returning Documents processed by LangChain's UnstructuredFileLoader
-- [PowerScaleSimpleDirectoryReader](./src/PowerScaleSimpleDirectoryReader.py): Custom Simple Directory Reader for LlamaIndex integration
-- [PowerScaleUnstructuredReader](./src/PowerScaleUnstructuredReader.py): Custom Loader returning Documents processed by LlamaIndex's UnstructuredReader
+- [PowerScalePathLoader](./src/powerscale_rag_connector/PowerScalePathLoader.py): Core module for identifying changed files
+- [PowerScaleDocumentLoader](./src/powerscale_rag_connector/PowerScaleDocumentLoader.py): Custom DocumentLoader for LangChain integration
+- [PowerScaleUnstructuredLoader](./src/powerscale_rag_connector/PowerScaleUnstructuredLoader.py): Custom Loader returning Documents processed by LangChain's UnstructuredFileLoader
+- [PowerScaleSimpleDirectoryReader](./src/powerscale_rag_connector/PowerScaleSimpleDirectoryReader.py): Custom Simple Directory Reader for LlamaIndex integration
+- [PowerScaleUnstructuredReader](./src/powerscale_rag_connector/PowerScaleUnstructuredReader.py): Custom Loader returning Documents processed by LlamaIndex's UnstructuredReader
 
 
 ## Requirements

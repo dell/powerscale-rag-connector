@@ -4,11 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "powerscale-rag-connector"
-version = "1.1.0"
+version = "2.0.0"
 dependencies = [
-  "elasticsearch",
-  "langchain_core",
-  "langchain_community"
+  "elasticsearch"
 ]
 authors = [
   { name = "Adam Brenner", email = "adam.brenner@dell.com" },
@@ -28,3 +26,19 @@ license = "MIT"
 Homepage = "https://github.com/dell/powerscale-rag-connector"
 Issues = "https://github.com/dell/powerscale-rag-connector/issues"
 Repository = "https://github.com/dell/powerscale-rag-connector.git"
+
+
+[project.optional-dependencies]
+langchain = [
+  "langchain-core",
+  "langchain-community",
+]
+llamaindex = [
+  "llama-index",
+]
+# aggregate
+all = [
+  "langchain-core",
+  "langchain-community",
+  "llama-index",
+]

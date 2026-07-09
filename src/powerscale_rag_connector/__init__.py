@@ -1,11 +1,23 @@
 """PowerScale RAG Connector module connects to MetadataIQ to help developers integrate PowerScale with their RAG application"""
 
-from .PowerScaleDocumentLoader import PowerScaleDocumentLoader
 from .PowerScaleHelper import PowerScaleHelper
 from .PowerScalePathLoader import PowerScalePathLoader
-from .PowerScaleUnstructuredLoader import PowerScaleUnstructuredLoader
-from .PowerScaleUnstructuredReader import PowerScaleUnstructuredReader
-from .PowerScaleSimpleDirectoryReader import PowerScaleSimpleDirectoryReader
+
+_LAZY = {
+    "PowerScaleDocumentLoader": ".PowerScaleDocumentLoader",
+    "PowerScaleUnstructuredLoader": ".PowerScaleUnstructuredLoader",
+    "PowerScaleUnstructuredReader": ".PowerScaleUnstructuredReader",
+    "PowerScaleSimpleDirectoryReader": ".PowerScaleSimpleDirectoryReader",
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY:
+        import importlib
+        module = importlib.import_module(_LAZY[name], package=__name__)
+        return getattr(module, name)
+    raise AttributeError(f"module 'powerscale_rag_connector' has no attribute {name!r}")
+
 
 __all__ = [
     "PowerScaleDocumentLoader",

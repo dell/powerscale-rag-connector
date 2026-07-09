@@ -1,4 +1,4 @@
 langchain_core==1.2.6
 llama_index==0.14.12
 nv_ingest_client==25.9.0
-powerscale_rag_connector==1.1.0
+powerscale_rag_connector==2.0.0
