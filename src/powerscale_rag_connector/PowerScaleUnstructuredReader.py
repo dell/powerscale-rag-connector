@@ -7,7 +7,7 @@ to efficiently find files that have changed.
 import logging
 import warnings
 from pathlib import Path
-from typing import Iterator, Optional, List
+from typing import Iterator, List, Optional
 
 # Suppress Unstructured library deprecation warnings, will be updated when the Unstructured Library or LlamaIndex is updated
 warnings.filterwarnings("ignore", message="'doc_id' is deprecated")
@@ -17,6 +17,8 @@ from llama_index.core.readers.base import BaseReader
 from llama_index.readers.file import UnstructuredReader  # requires `llama-index-readers-file`
 
 from .PowerScalePathLoader import PowerScalePathLoader
+
+_logger = logging.getLogger(__name__)
 
 
 class PowerScaleUnstructuredReader(BaseReader):
@@ -33,6 +35,7 @@ class PowerScaleUnstructuredReader(BaseReader):
         folder_path: Optional[str] = None,
         dataset_name: Optional[str] = None,
         mode: str = "single",
+        languages: Optional[List[str]] = None,
         force_scan: bool = False,
         verify_ssl: bool = True,
         app_name: str = "powerscale_rag_connector",
@@ -46,6 +49,7 @@ class PowerScaleUnstructuredReader(BaseReader):
             folder_path: The starting folder path to read data files from; must begin with "/ifs"
             dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
             mode: Reader mode; "single" keeps file as one doc, "elements" yields element-level docs.
+            languages: List of language codes for OCR hints (e.g. ["en"]). Defaults to ["en"].
             force_scan: Force scanning all data regardless of state
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
@@ -57,6 +61,7 @@ class PowerScaleUnstructuredReader(BaseReader):
         self.__folder_path = folder_path
         self.__dataset_name = dataset_name
         self.__split_documents = (mode == "elements")  # map mode string to LlamaIndex split_documents flag
+        self.__languages = languages if languages is not None else ["en"]
         self.__force_scan = force_scan
         self.__verify_ssl = verify_ssl
         self.__app_name = app_name
@@ -89,7 +94,7 @@ class PowerScaleUnstructuredReader(BaseReader):
                 docs = self._reader.load_data(
                     file=Path(str(file_path)),
                     split_documents=self.__split_documents,
-                    languages=["en"],
+                    languages=self.__languages,
                 )
                 for doc in docs:
                     metadata = (doc.metadata or {})
@@ -100,7 +105,6 @@ class PowerScaleUnstructuredReader(BaseReader):
                     doc.metadata = metadata
                     yield doc
             except Exception as e:
-                logging.error("Error loading file %s (snapshot=%s, changes=%s): %s",
+                _logger.error("Error loading file %s (snapshot=%s, changes=%s): %s",
                               file_path, snapshot, change_types, e)
-                continue
 

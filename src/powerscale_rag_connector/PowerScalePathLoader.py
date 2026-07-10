@@ -3,9 +3,11 @@
 import logging
 from pathlib import Path
 
-from typing import Iterator, Optional, Tuple, List
+from typing import Iterator, List, Optional, Tuple
 
 from .PowerScaleHelper import PowerScaleHelper
+
+_logger = logging.getLogger(__name__)
 
 
 class PowerScalePathLoader:
@@ -74,7 +76,7 @@ class PowerScalePathLoader:
             - Path: pathlib.Path object of the file
             - snapshot: MetadataIQ snapshot number
             - lin: OneFS logical inode number
-            - change_types: List of changes (e.g. ['ENTRY_ADDED'], ['ENTRY_DELETED'])
+            - change_types: List of changes (e.g. ['ENTRY_ADDED'], ['ENTRY_MODIFIED'])
         """
         if self.__force_scan:
             # When force scanning, use get_directory_changes with snapshot_id=0
@@ -85,8 +87,8 @@ class PowerScalePathLoader:
 
         for index, file_tuple in enumerate(file_generator):
             filepath, snapshot, lin, change_types = file_tuple
-            logging.debug(
-                "File returned %d: %s (gen %d) changes: %s",
+            _logger.debug(
+                "File returned %d: %s (snapshot: %d) changes: %s",
                 index,
                 filepath,
                 snapshot,

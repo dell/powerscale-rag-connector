@@ -6,9 +6,11 @@ from langchain_core.document_loaders import BaseLoader
 from langchain_unstructured import UnstructuredLoader
 from .PowerScalePathLoader import PowerScalePathLoader
 
+_logger = logging.getLogger(__name__)
+
 
 class PowerScaleUnstructuredLoader(BaseLoader):
-    """Loads files using UnstructuredFileLoader, leveraging PowerScale MetadataIQ to efficiently
+    """Loads files using UnstructuredLoader, leveraging PowerScale MetadataIQ to efficiently
     find files that have changed.
     """
 
@@ -19,7 +21,7 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         es_api_key: str,
         folder_path: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        mode: str = "single",
+        chunking_strategy: Optional[str] = None,
         force_scan: bool = False,
         verify_ssl: bool = True,
         app_name: str = "powerscale_rag_connector",
@@ -33,7 +35,11 @@ class PowerScaleUnstructuredLoader(BaseLoader):
             es_api_key: api_key for ElasticSearch in hashed (encoded) form
             folder_path: The starting folder path to read data files from; must begin with "/ifs"
             dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
-            mode: The mode to use for UnstructuredFileLoader ("single" or "elements").
+            chunking_strategy: Chunking strategy passed to UnstructuredLoader (e.g. "basic",
+                "by_title"). Defaults to None, which returns each document element as a
+                separate Document. To replicate the old mode="single" behaviour (one merged
+                Document per file), use chunking_strategy="basic" with a large max_characters
+                value set via the unstructured library.
             force_scan: Force scanning all data regardless of state
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
@@ -44,7 +50,7 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         self.__es_api_key = es_api_key
         self.__folder_path = folder_path
         self.__dataset_name = dataset_name
-        self.__mode = mode
+        self.__chunking_strategy = chunking_strategy
         self.__force_scan = force_scan
         self.__verify_ssl = verify_ssl
         self.__app_name = app_name
@@ -66,10 +72,11 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         """Lazy load documents from the file path."""
         for file_path, snapshot, lin, change_types in self.path_loader.lazy_load():
             try:
-                loader = UnstructuredLoader(
-                    file_path=str(file_path), mode=self.__mode
-                )
-                for doc in loader.load():
+                kwargs: dict = {}
+                if self.__chunking_strategy is not None:
+                    kwargs["chunking_strategy"] = self.__chunking_strategy
+                loader = UnstructuredLoader(file_path=str(file_path), **kwargs)
+                for doc in loader.lazy_load():
                     # ensure the source is set correctly
                     doc.metadata["source"] = str(file_path)
                     doc.metadata["snapshot"] = snapshot
@@ -78,5 +85,4 @@ class PowerScaleUnstructuredLoader(BaseLoader):
 
                     yield doc
             except Exception as e:
-                logging.error("Error loading file %s: %s", file_path, e)
-                continue
+                _logger.error("Error loading file %s: %s", file_path, e)

@@ -1,11 +1,12 @@
 import logging
-
 from typing import Iterator, Optional
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
 
 from .PowerScaleHelper import PowerScaleHelper
+
+_logger = logging.getLogger(__name__)
 
 
 class PowerScaleDocumentLoader(BaseLoader):
@@ -83,14 +84,10 @@ class PowerScaleDocumentLoader(BaseLoader):
                 "lin": lin,
                 "change_types": change_types
             }
-            logging.debug(
+            _logger.debug(
                 "File found=%s (snapshot: %d, changes: %s)",
                 metadata["source"],
                 metadata["snapshot"],
                 metadata["change_types"],
             )
-            try:
-                yield Document(page_content="", metadata=metadata)
-            except Exception as e:
-                logging.error("Error generating Document for %s: %s", str(file), str(e))
-                continue
+            yield Document(page_content="", metadata=metadata)

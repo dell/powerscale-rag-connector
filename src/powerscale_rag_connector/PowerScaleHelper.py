@@ -1,7 +1,7 @@
 import logging
 import json
 
-from typing import Iterator, Iterable, Tuple, Dict, Any, Optional, List
+from typing import Iterator, Tuple, Dict, Any, Optional, List
 from pathlib import Path
 
 from elasticsearch import Elasticsearch, exceptions
@@ -50,13 +50,6 @@ class PowerScaleHelper:
         self.__app_name = app_name
         self.__app_version = app_version
 
-        self.__es = Elasticsearch(
-            hosts=self.__es_host_url,
-            api_key=self.__es_api_key,
-            verify_certs=self.__verify_ssl,
-            ssl_show_warn=not self.__verify_ssl,
-        )
-
         # checkpoint document names (written to user's elastic index)
         self.__document_name = self.__app_name
         self.__dataset_index = "powerscale_rag_datasets"  # MetadataIQ elastic index for storing dataset definitions
@@ -93,11 +86,16 @@ class PowerScaleHelper:
                 if not p.startswith("/ifs"):
                     raise ValueError("all input_files must start with '/ifs'")
 
+        self.__es = Elasticsearch(
+            hosts=self.__es_host_url,
+            api_key=self.__es_api_key,
+            verify_certs=self.__verify_ssl,
+            ssl_show_warn=not self.__verify_ssl,
+        )
+
         # read dataset definition if we have a dataset name
         if self.__dataset_name is not None:
             self.__dataset_doc = self.refresh_dataset()
-            if self.__dataset_doc is None:
-                raise ValueError(f"dataset_name {self.__dataset_name} not found")
 
         # set root key for checkpoint document, folder_path or dataset based on current config
         if self.__dataset_name is not None:
@@ -132,8 +130,8 @@ class PowerScaleHelper:
 
     def get_checkpoint(self) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Determine if a past run was performed.
-        If a past run was performed, get the previously saved document and return it
-        If no past run was performed, snapshot is zero and full index scan would be performed
+        If a past run was performed, get the previously saved document and return it.
+        If no past run was performed, returns an empty state; a full scan will be triggered.
         """
         _logger.debug("Checking ElasticSearch for past runs")
         try:
@@ -142,16 +140,14 @@ class PowerScaleHelper:
             self.__last_state = resp["_source"]
             return True, self.__last_state
         except exceptions.NotFoundError:
-            return False, {self.__checkpoint_root: []}
+            self.__last_state = {self.__checkpoint_root: []}
+            return False, self.__last_state
 
     def refresh_dataset(self) -> Dict[str, Any]:
         """Refresh the MetadataIQ dataset configuration from elastic
         Throws NotFoundError if dataset record not found
         """
         _logger.debug("Checking elastic for dataset %s", self.__dataset_name)
-        if self.__dataset_name is None:
-            return {}
-
         resp = self.__es.get(index=self.__dataset_index, id=self.__dataset_name)
         _logger.debug("Dataset query response: %s", resp)
         return resp["_source"]
@@ -165,9 +161,12 @@ class PowerScaleHelper:
 
         try:
             result = self.__es.search(index=self.__es_index_name, body=query)
-            self.__latest_snapshot_id = int(
-                result["aggregations"]["max_snapid"]["value"]
-            )
+            raw = result["aggregations"]["max_snapid"]["value"]
+            if raw is None:
+                _logger.warning("update_latest_snapid: index exists but has no documents; defaulting to -1")
+                self.__latest_snapshot_id = -1
+            else:
+                self.__latest_snapshot_id = int(raw)
             _logger.debug(
                 "MetadataIQ latest snapshot id for %s = %d",
                 self.__es_index_name, self.__latest_snapshot_id
@@ -184,16 +183,13 @@ class PowerScaleHelper:
         if self.__last_state is None:
             self.get_checkpoint()
 
-        if self.__last_state is None:
+        try:
+            checkpoints = self.__last_state[self.__checkpoint_root]
+        except KeyError:
+            self.__last_state = (
+                None  # checkpoint root not found, force refresh of last state
+            )
             return -1
-        else:
-            try:
-                checkpoints = self.__last_state[self.__checkpoint_root]
-            except KeyError:
-                self.__last_state = (
-                    None  # checkpoint root not found, force refresh of last state
-                )
-                return -1
 
         for ckpt in checkpoints:
             # Match both path and version
@@ -211,13 +207,10 @@ class PowerScaleHelper:
         if self.__last_state is None:
             self.get_checkpoint()
 
-        if self.__last_state is None:
+        try:
+            checkpoints = self.__last_state[self.__checkpoint_root]
+        except KeyError:
             return 0
-        else:
-            try:
-                checkpoints = self.__last_state[self.__checkpoint_root]
-            except KeyError:
-                return 0
 
         for ckpt in checkpoints:
             if (
@@ -228,7 +221,7 @@ class PowerScaleHelper:
 
         return 0
 
-    def init_checkpoint_doc(self):
+    def init_checkpoint_doc(self) -> Dict[str, Any]:
         """Initialize new checkpoint document with current set of known checkpoint roots.
         N.B. This routine hardcodes key names and must stay in sync with possible
         __checkpoint_root and __checkpoint_key values
@@ -247,6 +240,13 @@ class PowerScaleHelper:
 
     def save_checkpoint(self) -> None:
         """Create or Update the last run numbers for so future calls know where we last indexed"""
+        if self.__latest_snapshot_id < 0:
+            _logger.warning(
+                "Skipping checkpoint write: latest_snapshot_id is invalid (%d), "
+                "ES may be unavailable",
+                self.__latest_snapshot_id,
+            )
+            return
         # if we have never read or updated a checkpoint, create a new document
         if self.__last_state is None:
             _logger.debug(
@@ -302,12 +302,11 @@ class PowerScaleHelper:
             )
         self.__last_state = state
 
-    def es_search_paged(self, query, batch_size=10000):
+    def es_search_paged(self, query, batch_size=10000) -> Iterator[Dict[str, Any]]:
         """
         Generates MetadataIQ entries in elasticsearch one at a time using search_after pagination.
 
         Args:
-            index: Name of the Elasticsearch index (index must contain MetadataIQ data).
             query: The Elasticsearch query parameters.
             batch_size: The number of documents to retrieve in each batch.
 
@@ -336,10 +335,6 @@ class PowerScaleHelper:
                 search_after=search_after,
                 request_timeout=3600,  # allow an hour for the first response on a large data set
             )
-
-            # _logger.debug(response)
-            # with open("/tmp/resp.json", "w") as f:
-            #     f.write(json.dumps(str(response), indent=4))
 
             if not response["hits"]["hits"]:
                 break  # No more results
@@ -370,7 +365,6 @@ class PowerScaleHelper:
                 }
             }
         """
-        retval = {}
         if self.__folder_path is not None:
             # build path query, trimming trailing whitespace and slashes
             path = self.__folder_path.rstrip("/").rstrip()
@@ -391,6 +385,8 @@ class PowerScaleHelper:
                     "minimum_should_match": 1
                 }
             }
+        else:
+            raise ValueError("build_query: no scope configured (folder_path, dataset_name, or input_files required)")
 
         # restrict results to 'normal' files, no dirs, links, etc.
         base_conditions = [{"term": {"data.file_type": "regular"}}]
@@ -406,18 +402,13 @@ class PowerScaleHelper:
         # add the extra conditions to the base query as a "must" clause
         retval = base_query
         for condition in base_conditions:
-            try:
-                retval["bool"]["must"].append(condition)  # type: ignore
-            except KeyError as e:
-                # "must" clause does not exist in base_query, create one
-                retval["bool"]["must"] = []
-                retval["bool"]["must"].append(condition)  # type: ignore
+            retval.setdefault("bool", {}).setdefault("must", []).append(condition)  # type: ignore
 
         return retval
 
     def match_files_by_snapshot(
         self, snapshot_id: int = -1
-    ) -> Iterable[Dict[str, Any]]:
+    ) -> Iterator[Dict[str, Any]]:
         """
         Return all files that have been added to the current path since the selected snapshot id up to the current snapshot
         If the snapshot_id argument is negative, files since the most recently saved checkpoint will be returned,
@@ -449,20 +440,23 @@ class PowerScaleHelper:
             - Path: pathlib.Path object of the file
             - snapshot: MetadataIQ snapshot number
             - lin: OneFS logical inode number
-            - change_types: List of changes (e.g. ['ENTRY_ADDED'], ['ENTRY_MODIFIED'], ['ENTRY_DELETED'])
+            - change_types: List of changes (e.g. ['ENTRY_ADDED'], ['ENTRY_MODIFIED'])
         """
+        search_success = False
         try:
-            search_success = True
-            is_first_run = snapshot_id < 0 and self.get_snapshot_id() < 0
+            # resolve snapshot once so is_first_run and match_files_by_snapshot share the same value
+            if snapshot_id < 0:
+                snapshot_id = self.get_snapshot_id()
+            is_first_run = snapshot_id < 0
             saved_mtime = self.get_saved_mtime()
-            self.__max_mtime = 0
+            self.__max_mtime = saved_mtime  # preserve previous value if scan returns no results
             for document in self.match_files_by_snapshot(snapshot_id):
                 _logger.debug("ES return the following document: %s", document)
                 file_path = document["_source"]["data"]["path"]
                 snapshot = document["_source"]["metadata"]["snapshots"]["s2"]
                 lin = document["_source"]["data"]["lin"]
                 change_types = document["_source"]["data"].get("change_types", [])
-                if change_types == ["ENTRY_MODIFIED"] and is_first_run:
+                if "ENTRY_MODIFIED" in change_types and is_first_run:
                     change_types = ["ENTRY_ADDED"]
                 btime = document["_source"]["data"].get("btime", 0)
                 mtime = document["_source"]["data"].get("mtime", 0)
@@ -470,8 +464,8 @@ class PowerScaleHelper:
                     change_types = ["ENTRY_ADDED"]
                 self.__max_mtime = max(self.__max_mtime, mtime)
                 yield Path(file_path), snapshot, lin, change_types
+            search_success = True  # only reached if loop ran to completion
         except Exception as e:
-            search_success = False
             _logger.error(
                 "get_directory_changes() exception; iteration failed, "
                 "skipping checkpoint update: %s",
@@ -506,11 +500,3 @@ class PowerScaleHelper:
         for path, snapshot, lin, change_types in self.get_directory_changes(snapshot_id):
             if "ENTRY_DELETED" in change_types:
                 yield path, snapshot, lin
-
-    def get_all_files(self) -> Iterator[Tuple[Path, int, int]]:
-        """Return iterator of all files matching path/dataset
-
-        Returns:
-            Iterator of (Path, snapshot, lin) tuples for added files
-        """
-        return self.get_new_files(snapshot_id=0)

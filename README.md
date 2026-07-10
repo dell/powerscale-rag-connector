@@ -179,7 +179,7 @@ The connector consists of several modules:
 
 - [PowerScalePathLoader](./src/powerscale_rag_connector/PowerScalePathLoader.py): Core module for identifying changed files
 - [PowerScaleDocumentLoader](./src/powerscale_rag_connector/PowerScaleDocumentLoader.py): Custom DocumentLoader for LangChain integration
-- [PowerScaleUnstructuredLoader](./src/powerscale_rag_connector/PowerScaleUnstructuredLoader.py): Custom Loader returning Documents processed by LangChain's UnstructuredFileLoader
+- [PowerScaleUnstructuredLoader](./src/powerscale_rag_connector/PowerScaleUnstructuredLoader.py): Custom Loader returning Documents processed by LangChain's UnstructuredLoader
 - [PowerScaleSimpleDirectoryReader](./src/powerscale_rag_connector/PowerScaleSimpleDirectoryReader.py): Custom Simple Directory Reader for LlamaIndex integration
 - [PowerScaleUnstructuredReader](./src/powerscale_rag_connector/PowerScaleUnstructuredReader.py): Custom Loader returning Documents processed by LlamaIndex's UnstructuredReader
 

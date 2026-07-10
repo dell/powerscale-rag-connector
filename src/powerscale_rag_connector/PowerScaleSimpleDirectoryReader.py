@@ -9,6 +9,8 @@ from llama_index.core.schema import Document
 
 from .PowerScaleHelper import PowerScaleHelper
 
+_logger = logging.getLogger(__name__)
+
 
 class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
     """LlamaIndex SimpleDirectoryReader using Dell PowerScale MetadataIQ.
@@ -190,7 +192,15 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         return list(self.lazy_load_data())
 
     def lazy_load_data(self) -> Iterator[Document]:
-        """Yield Documents whose source files were selected via PowerScale."""
+        """Yield Documents whose source files were selected via PowerScale.
+
+        Note: The MetadataIQ scan and checkpoint write complete before any Document is
+        yielded to the caller. If document loading or downstream processing fails
+        mid-stream, the checkpoint will already have advanced and affected files will
+        not be reprocessed on the next run. This is a known limitation of the current
+        single-phase checkpoint design (v2.0). A two-phase checkpointing scheme is
+        planned for a future release to provide stronger delivery guarantees.
+        """
         if self._force_scan:
             file_generator = self.__helper.get_directory_changes(snapshot_id=0)
         else:
@@ -208,12 +218,12 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
             ordered = ordered[: self.num_files_limit]
 
         if not ordered:
-            logging.debug("No files matched PowerScale selection or local filters.")
-            return iter(())
+            _logger.debug("No files matched PowerScale selection or local filters.")
+            return
 
         meta_wrap = partial(self._merge_metadata, selected=selected)
         child = self._child_reader(ordered, meta_wrap)
-        for d in child.load_data():
+        for d in child.lazy_load_data():
             yield d
 
     def _merge_metadata(
@@ -228,7 +238,7 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
             try:
                 user_meta = self._orig_cb(path_str) or {}
             except Exception as e:
-                logging.debug("file_metadata failed for %s: %s", path_str, e)
+                _logger.debug("file_metadata failed for %s: %s", path_str, e)
 
         snapshot, lin, changes = selected[os.path.normpath(path_str)]
         meta = {"source": path_str, "snapshot": snapshot, "lin": lin, "change_types": changes}

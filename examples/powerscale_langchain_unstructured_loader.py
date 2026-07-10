@@ -59,7 +59,6 @@ def get_parsed_documents() -> Iterator[Document]:
         "Getting and parsing documents from PowerScale: path=%s", FOLDER_PATH
     )
 
-    # Create the loader, using the 'elements' mode to get more granular document elements
     loader = PowerScaleUnstructuredLoader(
         es_host_url=ES_HOST_URL,
         es_index_name=ES_INDEX_NAME,
@@ -67,9 +66,9 @@ def get_parsed_documents() -> Iterator[Document]:
         folder_path=FOLDER_PATH,
         force_scan=FORCE_SCAN,
         verify_ssl=VERIFY_SSL,
-        # 'elements' mode splits the document into more granular chunks
-        # Use 'single' mode if you want the entire document as a single chunk
-        mode="elements",
+        # None (default) returns each document element as a separate Document.
+        # Use chunking_strategy="basic" for one merged Document per file.
+        chunking_strategy=None,
         app_name="powerscale_unstructured_example",
         app_version=1,
     )
