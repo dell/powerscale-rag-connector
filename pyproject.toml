@@ -6,11 +6,12 @@ build-backend = "hatchling.build"
 name = "powerscale-rag-connector"
 version = "2.0.0"
 dependencies = [
-  "elasticsearch"
+  "elasticsearch>=8,<9"
 ]
 authors = [
   { name = "Adam Brenner", email = "adam.brenner@dell.com" },
-  { name = "Michael Horgan", email = "mike.horgan1@dell.com" }
+  { name = "Michael Horgan", email = "mike.horgan1@dell.com" },
+  { name = "Sanne Bloemsma", email = "sanne.bloemsma@dell.com" }
 ]
 keywords = ["PowerScale", "OneFS", "Dell"]
 description = "An open-source python library designed to enhance RAG application performance during data ingestion by skipping files that have already been processed for Dell PowerScale storage."
@@ -31,14 +32,25 @@ Repository = "https://github.com/dell/powerscale-rag-connector.git"
 [project.optional-dependencies]
 langchain = [
   "langchain-core",
-  "langchain-community",
+  "langchain-unstructured",
 ]
 llamaindex = [
   "llama-index",
+  "llama-index-readers-file",
+  "unstructured",
 ]
 # aggregate
 all = [
   "langchain-core",
-  "langchain-community",
+  "langchain-unstructured",
   "llama-index",
+  "llama-index-readers-file",
+  "unstructured",
 ]
+test = [
+  "pytest>=7",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

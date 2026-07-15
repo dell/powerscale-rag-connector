@@ -35,7 +35,7 @@ This directory contains python examples demonstrating how to use PowerScale RAG 
    sudo mount -t nfs <cluster>:/ifs /ifs
    ```
 
-3. **Run an example**:
+4. **Run an example**:
 
    ```bash
    export PYTHONPATH=../src:$PYTHONPATH
@@ -63,11 +63,11 @@ This directory contains python examples demonstrating how to use PowerScale RAG 
 
 - **powerscale_langchain_doc_loader.py**: Demonstrates using PowerScaleDocumentLoader to create LangChain Document objects with metadata from PowerScale's MetadataIQ.
 
-- **powerscale_langchain_unstructured_loader.py**: Shows how to use PowerScaleUnstructuredLoader to parse documents using LangChain's UnstructuredFileLoader, extracting structured elements from source documents.
+- **powerscale_langchain_unstructured_loader.py**: Shows how to use PowerScaleUnstructuredLoader to parse documents using LangChain's UnstructuredLoader, extracting structured elements from source documents.
 
 - **powerscale_llamaindex_simple_directory_reader.py**: Shows how to use PowerScaleSimpleDirectoryReader to parse documents using LlamaIndex's SimpleDirectoryReader to create LlamaIndex Document objects with metadata from PowerScale's MetadataIQ.
 
-- **powerscale_llamaindex_unstructured_reader.py**: Shows how to use PowerScaleUnstructuredReader to parse documents using LlamaIndex's UnstructuredFileReader, extracting structured elements from source documents.
+- **powerscale_llamaindex_unstructured_reader.py**: Shows how to use PowerScaleUnstructuredReader to parse documents using LlamaIndex's UnstructuredReader, extracting structured elements from source documents.
 
 - **powerscale_nvingest_langchain_doc_loader.py**: End-to-end RAG pipeline using PowerScaleDocumentLoader — processes changed files through NvIngest v2, embeds chunks via NVIDIA NIM, and stores them in a LangChain ElasticsearchStore. Handles `ENTRY_MODIFIED` by deleting old chunks by `lin` before inserting new ones.
 
@@ -80,14 +80,29 @@ This directory contains python examples demonstrating how to use PowerScale RAG 
 - PowerScale storage system with MetadataIQ configured
 - Elasticsearch host with MetadataIQ index
 - Python 3.10+
-- Required Python packages (install via pip):
-  - langchain_core
-  - langchain_community
-  - elasticsearch
-  - _For unstructured loader:_ unstructured-client or local unstructured package and tools (see powerscale_langchain_unstructured_loader.py file header for more information)
-  - _For NVIngest example:_ nv-ingest-client (see installation instructions below)
-  - _For unstructured reader and simple directory reader:_ llama-index
-  - _For RAG vectorstore example:_ langchain-elasticsearch, langchain-nvidia-ai-endpoints, and a running NVIDIA NIM embeddings endpoint (see NIM setup below)
+- Python packages (install via `pip`):
+
+  **Base (all examples)**
+  - `elasticsearch`
+  - `powerscale_rag_connector`
+
+  **LangChain examples**
+  - `langchain_core`
+  - `langchain-unstructured` (for `powerscale_langchain_unstructured_loader.py`)
+
+  **LlamaIndex examples**
+  - `llama-index`
+
+  **NVIDIA Ingest examples**
+  - `nv-ingest-client` (see installation instructions below)
+
+  **Unstructured loaders**
+  - `unstructured-client` or a local `unstructured` package (see `powerscale_langchain_unstructured_loader.py` and `powerscale_llamaindex_unstructured_reader.py` headers for details)
+
+  **RAG vectorstore examples**
+  - LangChain (`powerscale_nvingest_langchain_doc_loader.py`): `langchain-elasticsearch` and `langchain-nvidia-ai-endpoints`
+  - LlamaIndex (`powerscale_nvingest_llamaindex_simple_dir_reader.py`): `llama-index-vector-stores-elasticsearch` and `llama-index-embeddings-nvidia`
+  - A running NVIDIA NIM embeddings container (see NIM setup below)
 
 ## Installing NVIDIA Ingest Client
 
@@ -102,7 +117,12 @@ pip install nv-ingest-client
 
 > **Note on terminology:** This codebase refers to NVIDIA's document ingestion service as **NvIngest** throughout. Some NVIDIA documentation and older references use the name **NeMo Retriever** or **NeMo** interchangeably for the same service. These refer to the same product — see the [NeMo Retriever repository](https://github.com/NVIDIA/NeMo-Retriever) for more context.
 
-## RAG Vectorstore Example (`powerscale_nvingest_rag_vectorstore.py`)
+## RAG Vectorstore Examples
+
+Two end-to-end examples ingest changed files through NvIngest v2, embed them with NVIDIA NIM, and store the vectors in Elasticsearch:
+
+- `powerscale_nvingest_langchain_doc_loader.py` (LangChain)
+- `powerscale_nvingest_llamaindex_simple_dir_reader.py` (LlamaIndex)
 
 ### What is NVIDIA NIM?
 
@@ -110,11 +130,19 @@ NVIDIA NIM (Inference Microservice) is a pre-packaged AI model served in a Docke
 
 ### Additional Requirements
 
+The RAG vectorstore examples need NVIDIA Ingest and the packages below. A running NVIDIA NIM embeddings container is required for vector generation; refer to the [NVIDIA NIM documentation](https://docs.nvidia.com/nim/large-language-models/latest/getting-started.html) for deployment instructions.
+
+For the LangChain example (`powerscale_nvingest_langchain_doc_loader.py`):
+
 ```bash
 pip install langchain-elasticsearch langchain-nvidia-ai-endpoints
 ```
 
-A running NVIDIA NIM embeddings container is required for vector generation. Refer to the [NVIDIA NIM documentation](https://docs.nvidia.com/nim/large-language-models/latest/getting-started.html) for deployment instructions.
+For the LlamaIndex example (`powerscale_nvingest_llamaindex_simple_dir_reader.py`):
+
+```bash
+pip install llama-index-vector-stores-elasticsearch llama-index-embeddings-nvidia
+```
 
 ### Configuration
 
@@ -140,6 +168,16 @@ FORCE_SCAN=false    # set true to reprocess all files, ignoring checkpoint
 
 ### Running
 
+Run the LangChain example:
+
 ```bash
-python powerscale_nvingest_rag_vectorstore.py
+python powerscale_nvingest_langchain_doc_loader.py
 ```
+
+Run the LlamaIndex example:
+
+```bash
+python powerscale_nvingest_llamaindex_simple_dir_reader.py
+```
+
+Both examples use the environment variables configured above. Set `FORCE_SCAN=true` to reprocess all files from the beginning, ignoring the checkpoint.

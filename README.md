@@ -108,6 +108,37 @@ for doc in loader.lazy_load():
     vectorstore.add(chunks, metadata={"lin": lin, "source": source})
 ```
 
+> **Note on deleted files:** MetadataIQ does not emit `ENTRY_DELETED` events in the current OneFS firmware version. `get_deleted_files()` raises `NotImplementedError` accordingly. To handle deletes, you must track `lin` values in your own application layer and detect when a previously-seen `lin` stops appearing in results.
+
+### Using as a LangChain Unstructured Loader
+
+`PowerScaleUnstructuredLoader` wraps `langchain-unstructured`'s `UnstructuredLoader` to parse file content for changed files:
+
+```python
+from powerscale_rag_connector import PowerScaleUnstructuredLoader
+
+loader = PowerScaleUnstructuredLoader(
+    es_host_url="https://elasticsearch:9200",
+    es_index_name="isi-metadataiq-index.cluster.guid",
+    es_api_key="your-encoded-api-key",
+    folder_path="/ifs/data",
+    # chunking_strategy controls how unstructured partitions each file.
+    # None (default): each document element is a separate Document object.
+    # "basic": merge elements into larger contiguous chunks.
+    # "by_title": chunk at section-title boundaries.
+    chunking_strategy=None,
+)
+
+for doc in loader.lazy_load():
+    print(doc.metadata["source"], doc.page_content[:80])
+```
+
+> **Deprecation note:** `langchain-community`'s `UnstructuredFileLoader` (the old loader
+> that accepted a `mode=` parameter) is deprecated and has been replaced by
+> `langchain-unstructured`'s `UnstructuredLoader`. `PowerScaleUnstructuredLoader` uses
+> the new loader. The old `mode="single"` / `mode="elements"` parameter does not exist
+> in the new API; use `chunking_strategy=` instead.
+
 ### Using as a LlamaIndex Reader
 
 Two LlamaIndex readers are available. **`PowerScaleSimpleDirectoryReader`** wraps LlamaIndex's `SimpleDirectoryReader` filtered to changed files:
@@ -136,7 +167,8 @@ reader = PowerScaleUnstructuredReader(
     es_index_name="isi-metadataiq-index.cluster.guid",
     es_api_key="your-encoded-api-key",
     folder_path="/ifs/data",
-    mode="elements"
+    mode="elements",   # 'single' keeps the whole file as one Document; 'elements' yields element-level Documents
+    languages=["en"],  # optional OCR language hints
 )
 
 documents = reader.load_data()

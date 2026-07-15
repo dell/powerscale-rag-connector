@@ -1,4 +1,4 @@
-"""Module providing a langchain-style PowerScale MetadataIQ Loader that returns Paths objects"""
+"""Module providing a langchain-style PowerScale MetadataIQ Loader that returns Path objects"""
 
 import logging
 from pathlib import Path
@@ -27,15 +27,15 @@ class PowerScalePathLoader:
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
     ) -> None:
-        """Initialize the loader with a file path.
+        """Initialize the loader with a folder path or dataset name.
 
         Args:
-            es_host_url: fqdn or IP address of the ElasticSearch database
+            es_host_url: URI of the Elasticsearch database incl. port (e.g. http://localhost:9200)
             es_index_name: name of the index
-            es_api_key: api_key for ElasticSearch in hashed form
+            es_api_key: api_key for Elasticsearch in hashed form
             folder_path: The starting folder path to read data from
             dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
-            force_scan: Force scanning all files regardless of index state
+            force_scan: Force scanning all data regardless of state
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
             app_version: A version number for the checkpoint document. Defaults to 1.
@@ -69,7 +69,7 @@ class PowerScalePathLoader:
     def lazy_load(self) -> Iterator[Tuple[Path, int, int, List[str]]]:
         """
         Lazy load only new files on current path using MetadataIQ metadata.
-        Yields files one at a time via scroll API.
+        Yields files one at a time via search_after pagination.
 
         Returns:
             Iterator yielding tuples containing:

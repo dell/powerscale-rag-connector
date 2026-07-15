@@ -8,15 +8,15 @@ facility.
 """
 
 import logging
+import os
 import sys
 import time
 from typing import Iterator
 
+from dotenv import load_dotenv
 from langchain_core.documents import Document
 
 from powerscale_rag_connector import PowerScaleDocumentLoader
-from dotenv import load_dotenv
-import os
 
 # Configure the logger
 logging.basicConfig(
@@ -28,10 +28,22 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-ES_HOST_URL = os.getenv("ES_HOST_URL")
-ES_INDEX_NAME = os.getenv("ES_INDEX_NAME")
-ES_API_KEY = os.getenv("ES_API_KEY")
-FOLDER_PATH = os.getenv("FOLDER_PATH")
+
+def _require_env(name: str) -> str:
+    """Return the value of env-var *name*, raising clearly if it is absent or empty."""
+    val = os.getenv(name, "").strip()
+    if not val:
+        raise RuntimeError(
+            f"Required environment variable {name!r} is not set. "
+            "Copy examples/.env.example to examples/.env and fill in the values."
+        )
+    return val
+
+
+ES_HOST_URL = _require_env("ES_HOST_URL")
+ES_INDEX_NAME = _require_env("ES_INDEX_NAME")
+ES_API_KEY = _require_env("ES_API_KEY")
+FOLDER_PATH = _require_env("FOLDER_PATH")
 FORCE_SCAN = os.getenv("FORCE_SCAN", "false").lower() == "true"
 VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"

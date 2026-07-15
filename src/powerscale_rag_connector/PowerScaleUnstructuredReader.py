@@ -9,9 +9,6 @@ import warnings
 from pathlib import Path
 from typing import Iterator, List, Optional
 
-# Suppress Unstructured library deprecation warnings, will be updated when the Unstructured Library or LlamaIndex is updated
-warnings.filterwarnings("ignore", message="'doc_id' is deprecated")
-
 from llama_index.core import Document
 from llama_index.core.readers.base import BaseReader
 from llama_index.readers.file import UnstructuredReader  # requires `llama-index-readers-file`
@@ -43,9 +40,9 @@ class PowerScaleUnstructuredReader(BaseReader):
     ) -> None:
         """
         Args:
-            es_host_url: URI of the ElasticSearch database incl. port (e.g. http://localhost:9200)
-            es_index_name: name of the ElasticSearch index
-            es_api_key: api_key for ElasticSearch in hashed (encoded) form
+            es_host_url: URI of the Elasticsearch database incl. port (e.g. http://localhost:9200)
+            es_index_name: name of the Elasticsearch index
+            es_api_key: api_key for Elasticsearch in hashed (encoded) form
             folder_path: The starting folder path to read data files from; must begin with "/ifs"
             dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
             mode: Reader mode; "single" keeps file as one doc, "elements" yields element-level docs.
@@ -55,9 +52,6 @@ class PowerScaleUnstructuredReader(BaseReader):
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
             app_version: A version number for the checkpoint document. Defaults to 1.
         """
-        self.__es_host_url = es_host_url
-        self.__es_index_name = es_index_name
-        self.__es_api_key = es_api_key
         self.__folder_path = folder_path
         self.__dataset_name = dataset_name
         self.__split_documents = (mode == "elements")  # map mode string to LlamaIndex split_documents flag
@@ -67,13 +61,13 @@ class PowerScaleUnstructuredReader(BaseReader):
         self.__app_name = app_name
         self.__app_version = app_version
 
-        # LlamaIndex Unstructured reader
-        self._reader = UnstructuredReader()
+        # LlamaIndex Unstructured reader is created lazily on first use.
+        self._reader = None
 
         self.path_loader = PowerScalePathLoader(
-            es_host_url=self.__es_host_url,
-            es_index_name=self.__es_index_name,
-            es_api_key=self.__es_api_key,
+            es_host_url=es_host_url,
+            es_index_name=es_index_name,
+            es_api_key=es_api_key,
             folder_path=self.__folder_path,
             dataset_name=self.__dataset_name,
             force_scan=self.__force_scan,
@@ -89,13 +83,22 @@ class PowerScaleUnstructuredReader(BaseReader):
         """
         Lazily yield LlamaIndex Documents from files discovered by PowerScalePathLoader.
         """
+        reader = self._reader
+        if reader is None:
+            reader = UnstructuredReader()
+            self._reader = reader
+
         for file_path, snapshot, lin, change_types in self.path_loader.lazy_load():
             try:
-                docs = self._reader.load_data(
-                    file=Path(str(file_path)),
-                    split_documents=self.__split_documents,
-                    languages=self.__languages,
-                )
+                # Suppress LlamaIndex doc_id deprecation warning emitted during load;
+                # scoped here so it does not affect any other code in the process.
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message="'doc_id' is deprecated")
+                    docs = reader.load_data(
+                        file=Path(str(file_path)),
+                        split_documents=self.__split_documents,
+                        unstructured_kwargs={"languages": self.__languages},
+                    )
                 for doc in docs:
                     metadata = (doc.metadata or {})
                     metadata["source"] = str(file_path)

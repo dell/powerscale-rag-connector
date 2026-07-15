@@ -5,15 +5,15 @@ PowerScale LlamaIndex Simple Directory Reader Example
 """
 
 import logging
-import time
+import os
 import sys
-
+import time
 from typing import Iterator
 
-from llama_index.core.schema import Document
-from powerscale_rag_connector import PowerScaleSimpleDirectoryReader
 from dotenv import load_dotenv
-import os
+from llama_index.core.schema import Document
+
+from powerscale_rag_connector import PowerScaleSimpleDirectoryReader
 
 # Configure the logger
 logging.basicConfig(
@@ -25,10 +25,22 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-ES_HOST_URL = os.getenv("ES_HOST_URL")
-ES_INDEX_NAME = os.getenv("ES_INDEX_NAME")
-ES_API_KEY = os.getenv("ES_API_KEY")
-INPUT_DIR = os.getenv("INPUT_DIR")
+
+def _require_env(name: str) -> str:
+    """Return the value of env-var *name*, raising clearly if it is absent or empty."""
+    val = os.getenv(name, "").strip()
+    if not val:
+        raise RuntimeError(
+            f"Required environment variable {name!r} is not set. "
+            "Copy examples/.env.example to examples/.env and fill in the values."
+        )
+    return val
+
+
+ES_HOST_URL = _require_env("ES_HOST_URL")
+ES_INDEX_NAME = _require_env("ES_INDEX_NAME")
+ES_API_KEY = _require_env("ES_API_KEY")
+INPUT_DIR = _require_env("INPUT_DIR")
 FORCE_SCAN = os.getenv("FORCE_SCAN", "false").lower() == "true"
 VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
@@ -43,9 +55,8 @@ def get_powerscale_documents() -> Iterator[Document]:
         es_host_url=ES_HOST_URL,
         es_index_name=ES_INDEX_NAME,
         es_api_key=ES_API_KEY,
-        input_dir=INPUT_DIR,  # NOTE: Use either input_dir OR input_files
-        input_files=None,  # if used, only look for new instances of these files
-        exclude=None,  # exclude is a list of files to NOT detect or load
+        input_dir=INPUT_DIR,  # NOTE: Use either input_dir OR input_files, not both
+        exclude=None,  # exclude is a list of exact file paths to skip
         recursive=False,
         verify_ssl=VERIFY_SSL,
         force_scan=FORCE_SCAN,

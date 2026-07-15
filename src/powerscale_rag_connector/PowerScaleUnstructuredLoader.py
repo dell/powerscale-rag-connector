@@ -27,12 +27,12 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
     ) -> None:
-        """Initialize with a file path.
+        """Initialize with a folder path or dataset name.
 
         Args:
-            es_host_url: URI of the ElasticSearch database incl. port (e.g. http://localhost:9200)
-            es_index_name: name of the ElasticSearch index
-            es_api_key: api_key for ElasticSearch in hashed (encoded) form
+            es_host_url: URI of the Elasticsearch database incl. port (e.g. http://localhost:9200)
+            es_index_name: name of the Elasticsearch index
+            es_api_key: api_key for Elasticsearch in hashed (encoded) form
             folder_path: The starting folder path to read data files from; must begin with "/ifs"
             dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
             chunking_strategy: Chunking strategy passed to UnstructuredLoader (e.g. "basic",
@@ -45,9 +45,6 @@ class PowerScaleUnstructuredLoader(BaseLoader):
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
             app_version: A version number for the checkpoint document. Defaults to 1.
         """
-        self.__es_host_url = es_host_url
-        self.__es_index_name = es_index_name
-        self.__es_api_key = es_api_key
         self.__folder_path = folder_path
         self.__dataset_name = dataset_name
         self.__chunking_strategy = chunking_strategy
@@ -56,10 +53,15 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         self.__app_name = app_name
         self.__app_version = app_version
 
+        kwargs = {}
+        if chunking_strategy is not None:
+            kwargs["chunking_strategy"] = chunking_strategy
+        self._unstructured_loader = UnstructuredLoader(**kwargs)
+
         self.path_loader = PowerScalePathLoader(
-            es_host_url=self.__es_host_url,
-            es_index_name=self.__es_index_name,
-            es_api_key=self.__es_api_key,
+            es_host_url=es_host_url,
+            es_index_name=es_index_name,
+            es_api_key=es_api_key,
             folder_path=self.__folder_path,
             dataset_name=self.__dataset_name,
             force_scan=self.__force_scan,
@@ -72,11 +74,8 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         """Lazy load documents from the file path."""
         for file_path, snapshot, lin, change_types in self.path_loader.lazy_load():
             try:
-                kwargs: dict = {}
-                if self.__chunking_strategy is not None:
-                    kwargs["chunking_strategy"] = self.__chunking_strategy
-                loader = UnstructuredLoader(file_path=str(file_path), **kwargs)
-                for doc in loader.lazy_load():
+                self._unstructured_loader.file_path = str(file_path)
+                for doc in self._unstructured_loader.lazy_load():
                     # ensure the source is set correctly
                     doc.metadata["source"] = str(file_path)
                     doc.metadata["snapshot"] = snapshot

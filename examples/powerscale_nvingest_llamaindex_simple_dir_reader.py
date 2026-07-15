@@ -65,18 +65,32 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-ES_HOST_URL = os.getenv("ES_HOST_URL").rstrip("/")
-ES_INDEX_NAME = os.getenv("ES_INDEX_NAME")
+
+def _require_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise EnvironmentError(
+            f"Required environment variable '{name}' is not set. "
+            "See examples/.env.example for configuration details."
+        )
+    return value
+
+
+ES_HOST_URL = _require_env("ES_HOST_URL").rstrip("/")
+ES_INDEX_NAME = _require_env("ES_INDEX_NAME")
 VECTORSTORE_INDEX = os.getenv("VECTORSTORE_INDEX", "rag_vectors")
 VECTORSTORE_ES_URL = os.getenv("VECTORSTORE_ES_URL", "http://localhost:9200").rstrip("/")
-ES_API_KEY = os.getenv("ES_API_KEY")
-INPUT_DIR = os.path.normpath(os.getenv("INPUT_DIR"))
+ES_API_KEY = _require_env("ES_API_KEY")
+INPUT_DIR = os.path.normpath(_require_env("INPUT_DIR"))
 VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() == "true"
 
-NV_INGEST_ENDPOINT = os.getenv("NV_INGEST_ENDPOINT")
-NV_INGEST_PORT = int(os.getenv("NV_INGEST_PORT"))
+NV_INGEST_ENDPOINT = _require_env("NV_INGEST_ENDPOINT")
+NV_INGEST_PORT = int(_require_env("NV_INGEST_PORT"))
 _nim_base = os.getenv("NVIDIA_EMBEDDING_URL", "").rstrip("/")
-NIM_EMBED_URL = _nim_base if _nim_base.endswith("/v1") else f"{_nim_base}/v1" if _nim_base else ""
+# NIM Embeddings uses the OpenAI-compatible /v1 API; normalize so users can pass
+# http://host:8000 or http://host:8000/v1 and both work correctly.
+_nim_base = _nim_base[:_nim_base.index("/v1")] if "/v1" in _nim_base else _nim_base
+NIM_EMBED_URL = f"{_nim_base}/v1" if _nim_base else ""
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 NVIDIA_EMBEDDING_MODEL = os.getenv("NVIDIA_EMBEDDING_MODEL", "")
 FORCE_SCAN = os.getenv("FORCE_SCAN", "false").lower() == "true"
@@ -145,7 +159,7 @@ def run_nvingest(file_path: Path) -> List[Dict[str, Any]]:
 async def _delete_by_lin_async(vector_store: ElasticsearchStore, lin: int) -> int:
     response = await vector_store.client.delete_by_query(
         index=VECTORSTORE_INDEX,
-        body={"query": {"term": {"metadata.lin": lin}}},
+        query={"term": {"metadata.lin": lin}},
         refresh=True,
     )
     return response.get("deleted", 0)

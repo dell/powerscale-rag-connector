@@ -9,15 +9,15 @@ with PowerScale MetadataIQ.
 Requirements:
     pip install llama-index-core llama-index-readers-file unstructured
 """
-import os
 import logging
+import os
 import sys
 import time
-from pathlib import Path
-from typing import List, Dict, Any
 from collections import defaultdict
-from dotenv import load_dotenv
+from pathlib import Path
+from typing import Any, Dict, List
 
+from dotenv import load_dotenv
 from llama_index.core import Document
 
 from powerscale_rag_connector import PowerScaleUnstructuredReader
@@ -32,10 +32,22 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-ES_HOST_URL = os.getenv("ES_HOST_URL")
-ES_INDEX_NAME = os.getenv("ES_INDEX_NAME")
-ES_API_KEY = os.getenv("ES_API_KEY")
-INPUT_DIR = os.getenv("INPUT_DIR")
+
+def _require_env(name: str) -> str:
+    """Return the value of env-var *name*, raising clearly if it is absent or empty."""
+    val = os.getenv(name, "").strip()
+    if not val:
+        raise RuntimeError(
+            f"Required environment variable {name!r} is not set. "
+            "Copy examples/.env.example to examples/.env and fill in the values."
+        )
+    return val
+
+
+ES_HOST_URL = _require_env("ES_HOST_URL")
+ES_INDEX_NAME = _require_env("ES_INDEX_NAME")
+ES_API_KEY = _require_env("ES_API_KEY")
+INPUT_DIR = _require_env("INPUT_DIR")
 FORCE_SCAN = os.getenv("FORCE_SCAN", "false").lower() == "true"
 VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"

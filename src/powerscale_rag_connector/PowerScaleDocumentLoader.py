@@ -13,6 +13,11 @@ class PowerScaleDocumentLoader(BaseLoader):
     """LangChain Document Loader that uses Dell PowerScale's MetadataIQ feature to "checkpoint" the loader and only
     read files that have changed between its last run.
 
+    This is a metadata-only loader: the returned Documents have an empty ``page_content``
+    string and only populate ``metadata`` with ``source``, ``snapshot``, ``lin``, and
+    ``change_types``. Use PowerScaleUnstructuredLoader or a custom reader to load file
+    contents.
+
     Applications requiring more flexibility (without strict LangChain DocumentLoader API compatibility)
     may prefer to use the PowerScalePathLoader.
     """
@@ -29,12 +34,12 @@ class PowerScaleDocumentLoader(BaseLoader):
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
     ) -> None:
-        """Initialize the loader with a file path or dataset name.
+        """Initialize the loader with a folder path or dataset name.
 
         Args:
-            es_host_url: URI of the ElasticSearch database incl. port (e.g. http://localhost:9200)
-            es_index_name: name of the ElasticSearch index
-            es_api_key: api_key for ElasticSearch in hashed (encoded) form
+            es_host_url: URI of the Elasticsearch database incl. port (e.g. http://localhost:9200)
+            es_index_name: name of the Elasticsearch index
+            es_api_key: api_key for Elasticsearch in hashed (encoded) form
             folder_path: The starting folder path to read data files from; must begin with "/ifs"
             dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
             force_scan: Force scanning all data regardless of state

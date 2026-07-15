@@ -26,6 +26,7 @@ Environment variables (.env file):
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -44,13 +45,24 @@ logger = logging.getLogger(__name__)
 # Load environment variables from .env file
 load_dotenv()
 
+
+def _require_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise EnvironmentError(
+            f"Required environment variable '{name}' is not set. "
+            "See examples/.env.example for configuration details."
+        )
+    return value
+
+
 # Get environment variables at the top of the file
-NV_INGEST_ENDPOINT = os.getenv("NV_INGEST_ENDPOINT")
-NV_INGEST_PORT = int(os.getenv("NV_INGEST_PORT"))
-ES_HOST_URL = os.getenv("ES_HOST_URL")
-ES_INDEX_NAME = os.getenv("ES_INDEX_NAME")
-ES_API_KEY = os.getenv("ES_API_KEY")
-FOLDER_PATH = os.getenv("FOLDER_PATH")
+NV_INGEST_ENDPOINT = _require_env("NV_INGEST_ENDPOINT")
+NV_INGEST_PORT = int(_require_env("NV_INGEST_PORT"))
+ES_HOST_URL = _require_env("ES_HOST_URL")
+ES_INDEX_NAME = _require_env("ES_INDEX_NAME")
+ES_API_KEY = _require_env("ES_API_KEY")
+FOLDER_PATH = _require_env("FOLDER_PATH")
 FORCE_SCAN = os.getenv("FORCE_SCAN", "false").lower() == "true"
 VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"

@@ -1,3 +1,4 @@
+import copy
 import logging
 import json
 
@@ -10,7 +11,39 @@ _logger = logging.getLogger(__name__)
 
 
 class PowerScaleHelper:
-    """Helper class to talk to PowerScale's MetadataIQ indexed metadata facility and provide fast metadata search results"""
+    """Core helper for querying Dell PowerScale MetadataIQ via Elasticsearch.
+
+    MetadataIQ indexes file-system change events into Elasticsearch.  This class
+    reads those events incrementally and exposes them as Python iterators so that
+    downstream loaders only process files that have actually changed.
+
+    **Scopes** — exactly one must be supplied at construction time:
+
+    * ``folder_path`` — monitor all files under a PowerScale directory path
+      (must start with ``/ifs``).
+    * ``dataset_name`` — use a named MetadataIQ dataset definition stored in
+      Elasticsearch to filter files.
+    * ``input_files`` — monitor a fixed list of specific file paths
+      (each must start with ``/ifs``).
+
+    **Checkpointing** — after each successful scan the highest-seen snapshot ID
+    is written back to Elasticsearch (keyed by ``app_name``).  On the next run
+    only files whose snapshot ID is strictly greater than the saved value are
+    returned, making scans incremental.  A ``force_scan`` / ``snapshot_id=0``
+    call bypasses the checkpoint and returns files from snapshot 1 onwards (i.e.
+    ``metadata.snapshots.s2 > 0``); snapshot 0 files are not returned.
+
+    **Key methods:**
+
+    * :meth:`get_directory_changes` — primary iterator; yields
+      ``(Path, snapshot, lin, change_types)`` tuples and saves a checkpoint when
+      the generator is exhausted normally.
+    * :meth:`get_new_files` — thin wrapper that filters to ``ENTRY_ADDED`` only.
+    * :meth:`get_all_files` — full-scan iterator returning every file regardless
+      of change type.
+    * :meth:`build_query` — constructs the Elasticsearch query for the active scope.
+    * :meth:`save_checkpoint` / :meth:`get_checkpoint` — explicit checkpoint I/O.
+    """
 
     def __init__(
         self,
@@ -27,9 +60,9 @@ class PowerScaleHelper:
         """Initialize the helper with a scope (folder path, dataset name, or file list).
 
         Args:
-            es_host_url: fqdn or IP address of the ElasticSearch database
+            es_host_url: URI of the Elasticsearch database incl. port (e.g. http://localhost:9200)
             es_index_name: name of the index
-            es_api_key: api_key for ElasticSearch in hashed form
+            es_api_key: api_key for Elasticsearch in hashed form
             folder_path: The root of the directory tree to search
             input_files: List of specific file paths to process
             dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
@@ -64,17 +97,8 @@ class PowerScaleHelper:
         if self.__dataset_name is not None and (self.__folder_path is not None or self.__input_files is not None):
             raise ValueError("dataset_name is mutually exclusive with folder_path and input_files; select one only")
 
-        # Validate folder_path begins with "/ifs"
-        #
-        # The MetadataIQ document schema for OneFS 9.10 uses a path tokenizer for the path/filename string.
-        # This complicates query construction somewhat, as it matches search terms against each component of the
-        # full path string.
-        # In order to deal with this we are searching with elastic's "phrase_prefix" predicate,
-        # which will match partial, intermediate paths. This can cause confusing results, so
-        # for the sake of this PowerScale demo we are requiring that paths begin with the
-        # OneFS convention of a root directory called "/ifs".  MetadataIQ consumers
-        # are certainly free to come up with better queries that work with their applications,
-        # which can be supported through the dataset query interface.
+        # Validate folder_path begins with "/ifs". The query uses phrase_prefix on the
+        # tokenized path field, so anchoring the path to the OneFS root keeps matches unambiguous.
         if self.__folder_path is not None and not self.__folder_path.startswith("/ifs"):
             raise ValueError("folder_path must start with '/ifs'")
 
@@ -82,6 +106,8 @@ class PowerScaleHelper:
         if self.__input_files is not None:
             if not isinstance(self.__input_files, list) or not all(isinstance(p, str) for p in self.__input_files):
                 raise ValueError("input_files must be a List[str]")
+            if not self.__input_files:
+                raise ValueError("input_files cannot be empty")
             for p in self.__input_files:
                 if not p.startswith("/ifs"):
                     raise ValueError("all input_files must start with '/ifs'")
@@ -109,7 +135,7 @@ class PowerScaleHelper:
         elif self.__input_files is not None:
             self.__checkpoint_root = "input_files"
             self.__checkpoint_key = "paths"
-            self.__checkpoint_value = self.__input_files
+            self.__checkpoint_value = sorted(self.__input_files)  # normalize order for stable matching
         else:
             raise ValueError("Could not determine checkpoint root configuration")
 
@@ -133,34 +159,36 @@ class PowerScaleHelper:
         If a past run was performed, get the previously saved document and return it.
         If no past run was performed, returns an empty state; a full scan will be triggered.
         """
-        _logger.debug("Checking ElasticSearch for past runs")
+        _logger.debug("Checking Elasticsearch for past runs")
         try:
             resp = self.__es.get(index=self.__es_index_name, id=self.__document_name)
             _logger.debug("Checkpoint query response: %s", resp)
             self.__last_state = resp["_source"]
             return True, self.__last_state
         except exceptions.NotFoundError:
-            self.__last_state = {self.__checkpoint_root: []}
+            self.__last_state = self.init_checkpoint_doc()
             return False, self.__last_state
 
     def refresh_dataset(self) -> Dict[str, Any]:
-        """Refresh the MetadataIQ dataset configuration from elastic
-        Throws NotFoundError if dataset record not found
+        """Refresh the MetadataIQ dataset configuration from elastic.
+        Returns an empty dict if this helper was not constructed with a dataset_name.
+        Raises NotFoundError if the dataset record does not exist in Elasticsearch.
         """
         _logger.debug("Checking elastic for dataset %s", self.__dataset_name)
+        if self.__dataset_name is None:
+            return {}
         resp = self.__es.get(index=self.__dataset_index, id=self.__dataset_name)
         _logger.debug("Dataset query response: %s", resp)
         return resp["_source"]
 
     def update_latest_snapid(self) -> None:
         """Update the latest snapshot ID from the index"""
-        query = {
-            "aggs": {"max_snapid": {"max": {"field": "metadata.snapshots.s2"}}},
-            "size": 0,
-        }
-
         try:
-            result = self.__es.search(index=self.__es_index_name, body=query)
+            result = self.__es.search(
+                index=self.__es_index_name,
+                aggs={"max_snapid": {"max": {"field": "metadata.snapshots.s2"}}},
+                size=0,
+            )
             raw = result["aggregations"]["max_snapid"]["value"]
             if raw is None:
                 _logger.warning("update_latest_snapid: index exists but has no documents; defaulting to -1")
@@ -173,10 +201,10 @@ class PowerScaleHelper:
             )
         except Exception as e:
             _logger.error(
-                "Error in PowerScale RAG ConnectorHelper.update_latest_snapid; defaulting to gen -1: %s",
+                "Error in PowerScale RAG Connector Helper update_latest_snapid; defaulting to -1: %s",
                 e
             )
-            self.__latest_snapshot_id = -1  # default value on exception
+            self.__latest_snapshot_id = -1
 
     def get_snapshot_id(self) -> int:
         """Look up last processed snapshot id for current path and version"""
@@ -186,9 +214,6 @@ class PowerScaleHelper:
         try:
             checkpoints = self.__last_state[self.__checkpoint_root]
         except KeyError:
-            self.__last_state = (
-                None  # checkpoint root not found, force refresh of last state
-            )
             return -1
 
         for ckpt in checkpoints:
@@ -197,7 +222,7 @@ class PowerScaleHelper:
                 ckpt[self.__checkpoint_key] == self.__checkpoint_value
                 and ckpt.get("version") == self.__app_version
             ):
-                return ckpt["snapshot"]
+                return ckpt.get("snapshot", -1)
 
         # not found, return -1
         return -1
@@ -222,21 +247,11 @@ class PowerScaleHelper:
         return 0
 
     def init_checkpoint_doc(self) -> Dict[str, Any]:
-        """Initialize new checkpoint document with current set of known checkpoint roots.
-        N.B. This routine hardcodes key names and must stay in sync with possible
-        __checkpoint_root and __checkpoint_key values
+        """Return a new checkpoint document with the known root keys.
+
+        Note: the keys here must match the possible __checkpoint_root values.
         """
-        retval = {"folder_paths": [], "datasets": [], "input_files": []}
-        retval["folder_paths"].append(
-            {"path": "__empty_path__", "version": 1, "snapshot": -1, "saved_mtime": 0}
-        )
-        retval["datasets"].append(
-            {"dataset": "__empty_dataset__", "version": 1, "snapshot": -1, "saved_mtime": 0}
-        )
-        retval["input_files"].append(
-            {"paths": [], "version": 1, "snapshot": -1, "saved_mtime": 0}
-        )
-        return retval
+        return {"folder_paths": [], "datasets": [], "input_files": []}
 
     def save_checkpoint(self) -> None:
         """Create or Update the last run numbers for so future calls know where we last indexed"""
@@ -247,12 +262,18 @@ class PowerScaleHelper:
                 self.__latest_snapshot_id,
             )
             return
-        # if we have never read or updated a checkpoint, create a new document
         if self.__last_state is None:
             _logger.debug(
                 "Checkpoint save, no current last_state, creating new save document"
             )
             self.__last_state = self.init_checkpoint_doc()
+        else:
+            # Backfill missing root keys so a checkpoint written by an older version
+            # (or a different scope sharing the same app_name) can still be appended to.
+            defaults = self.init_checkpoint_doc()
+            for key in defaults:
+                if key not in self.__last_state:
+                    self.__last_state[key] = defaults[key]
 
         doc = {
             self.__checkpoint_key: self.__checkpoint_value,
@@ -262,7 +283,7 @@ class PowerScaleHelper:
         }
         state = self.__last_state
         state_key_found = False
-        state_snapshot_id = 0
+        state_snapshot_id = -1  # use -1 so a brand-new entry always triggers a write
         # Check if state has our old run, if we do, update it
         for index, keydoc in enumerate(state[self.__checkpoint_root]):
             # Match both path and version
@@ -270,9 +291,10 @@ class PowerScaleHelper:
                 keydoc[self.__checkpoint_key] == self.__checkpoint_value
                 and keydoc.get("version") == self.__app_version
             ):
-                state_snapshot_id = keydoc["snapshot"]
+                state_snapshot_id = keydoc.get("snapshot", -1)
                 state[self.__checkpoint_root][index] = doc
                 state_key_found = True
+                break
 
         # Brand new run, need to add it to our state
         if not state_key_found:
@@ -358,7 +380,7 @@ class PowerScaleHelper:
                         },
                         {
                             "match_phrase_prefix": {
-                                "data.path": "/ifs/<path>"
+                                "data.path": "/ifs/<path>/"
                             }
                         }
                     ]
@@ -366,15 +388,25 @@ class PowerScaleHelper:
             }
         """
         if self.__folder_path is not None:
-            # build path query, trimming trailing whitespace and slashes
-            path = self.__folder_path.rstrip("/").rstrip()
+            # build path query, trimming trailing whitespace and slashes, then
+            # re-adding a single trailing slash so /ifs/data/ does not false-match
+            # a sibling path like /ifs/databank when the field is a single token.
+            path = self.__folder_path.rstrip().rstrip("/") + "/"
             base_query = {
                 "bool": {"must": [{"match_phrase_prefix": {"data.path": path}}]}
             }
         elif self.__dataset_name is not None:
-            # use dataset definition query
-            base_query = json.loads(self.__dataset_doc["query"])["query"]
-            _logger.debug("Dataset query string from definition: %s", base_query)
+            # use dataset definition query; tolerate both string-JSON and dict storage
+            raw_query = self.__dataset_doc["query"]
+            if isinstance(raw_query, str):
+                parsed = json.loads(raw_query)
+            else:
+                parsed = raw_query
+            if isinstance(parsed, dict) and "query" in parsed:
+                base_query = parsed["query"]
+            else:
+                base_query = parsed
+            _logger.debug("Dataset query from definition: %s", base_query)
         elif self.__input_files is not None:
             # use should+match_phrase for exact path matches on text field
             shoulds = [{"match_phrase": {"data.path": p}} for p in self.__input_files]
@@ -394,15 +426,15 @@ class PowerScaleHelper:
         # if we are filtering by snapshot_id, extend the query filters with the
         # range filter
         if not all_files:
-            base_conditions.append({"range": {"metadata.snapshots.s2": {"gt": snapshot_id}}})  # type: ignore
+            base_conditions.append({"range": {"metadata.snapshots.s2": {"gt": snapshot_id}}})
             base_conditions.append(
-                {"range": {"metadata.snapshots.s2": {"lte": self.__latest_snapshot_id}}}  # type: ignore
+                {"range": {"metadata.snapshots.s2": {"lte": self.__latest_snapshot_id}}}
             )
 
         # add the extra conditions to the base query as a "must" clause
-        retval = base_query
+        retval = copy.deepcopy(base_query)
         for condition in base_conditions:
-            retval.setdefault("bool", {}).setdefault("must", []).append(condition)  # type: ignore
+            retval.setdefault("bool", {}).setdefault("must", []).append(condition)
 
         return retval
 
@@ -410,7 +442,7 @@ class PowerScaleHelper:
         self, snapshot_id: int = -1
     ) -> Iterator[Dict[str, Any]]:
         """
-        Return all files that have been added to the current path since the selected snapshot id up to the current snapshot
+        Return all files whose MetadataIQ snapshot is in the selected range.
         If the snapshot_id argument is negative, files since the most recently saved checkpoint will be returned,
         but the checkpoint will not be updated. Calling this function with the default -1 multiple times will return
         the same files (and potentially new ones) repeatedly.
@@ -424,6 +456,8 @@ class PowerScaleHelper:
         # skipping or duplicating results
         self.update_latest_snapid()
 
+        # Main repo style: always use the snapshot range, even for snapshot_id=0.
+        # snapshot_id=0 means "start from the beginning" (gt 0), not "return all".
         query = self.build_query(all_files=False, snapshot_id=snapshot_id)
 
         _logger.debug("ES query: %s", query)
@@ -444,22 +478,26 @@ class PowerScaleHelper:
         """
         search_success = False
         try:
-            # resolve snapshot once so is_first_run and match_files_by_snapshot share the same value
-            if snapshot_id < 0:
-                snapshot_id = self.get_snapshot_id()
-            is_first_run = snapshot_id < 0
+            # Main repo style: first run only when the caller explicitly uses the
+            # default negative snapshot_id AND no checkpoint exists yet.
+            is_first_run = snapshot_id < 0 and self.get_snapshot_id() < 0
             saved_mtime = self.get_saved_mtime()
             self.__max_mtime = saved_mtime  # preserve previous value if scan returns no results
             for document in self.match_files_by_snapshot(snapshot_id):
                 _logger.debug("ES return the following document: %s", document)
                 file_path = document["_source"]["data"]["path"]
-                snapshot = document["_source"]["metadata"]["snapshots"]["s2"]
-                lin = document["_source"]["data"]["lin"]
+                snapshot = int(document["_source"]["metadata"]["snapshots"]["s2"])
+                lin = int(document["_source"]["data"]["lin"])
                 change_types = document["_source"]["data"].get("change_types", [])
                 if "ENTRY_MODIFIED" in change_types and is_first_run:
                     change_types = ["ENTRY_ADDED"]
-                btime = document["_source"]["data"].get("btime", 0)
-                mtime = document["_source"]["data"].get("mtime", 0)
+                # Use ``or 0`` so a JSON null/None in the ES document is treated as 0.
+                btime = int(document["_source"]["data"].get("btime") or 0)
+                mtime = int(document["_source"]["data"].get("mtime") or 0)
+                # If the file's birth time (creation) is newer than the last-run mtime
+                # checkpoint, the file must have been created after the previous run and
+                # MetadataIQ tagged it ENTRY_MODIFIED because it was also written before we
+                # scanned. Reclassify as ENTRY_ADDED so callers treat it as a new file.
                 if "ENTRY_MODIFIED" in change_types and btime > saved_mtime:
                     change_types = ["ENTRY_ADDED"]
                 self.__max_mtime = max(self.__max_mtime, mtime)
@@ -467,9 +505,10 @@ class PowerScaleHelper:
             search_success = True  # only reached if loop ran to completion
         except Exception as e:
             _logger.error(
-                "get_directory_changes() exception; iteration failed, "
-                "skipping checkpoint update: %s",
+                "get_directory_changes() failed: scan incomplete, checkpoint not updated, "
+                "0 results returned. Error: %s",
                 str(e),
+                exc_info=True,
             )
         finally:
             if search_success:
@@ -489,14 +528,27 @@ class PowerScaleHelper:
                 yield path, snapshot, lin
 
     def get_deleted_files(self, snapshot_id: int = -1) -> Iterator[Tuple[Path, int, int]]:
-        """Return iterator of only files that were deleted
+        """Not supported: MetadataIQ does not emit ENTRY_DELETED events."""
+        raise NotImplementedError(
+            "get_deleted_files() is not supported: MetadataIQ does not return ENTRY_DELETED events."
+        )
 
-        Args:
-            snapshot_id: snapshot ID to start from. If negative, uses last checkpoint.
+    def get_all_files(self) -> Iterator[Tuple[Path, int, int]]:
+        """Return iterator of all files matching the configured path/dataset scope.
+
+        Triggers a scan with snapshot_id=0, ignoring any saved checkpoint. The
+        query uses ``metadata.snapshots.s2 > 0`` ( MetadataIQ snapshot 0 is not
+        included), but all remaining files are returned regardless of change type
+        (ENTRY_ADDED, ENTRY_MODIFIED, etc.), unlike get_new_files() which only
+        yields files that were added.
 
         Returns:
-            Iterator of (Path, snapshot, lin) tuples for deleted files
+            Iterator of (Path, snapshot, lin) tuples for files currently
+            visible in MetadataIQ for this scope with snapshot > 0.
         """
-        for path, snapshot, lin, change_types in self.get_directory_changes(snapshot_id):
-            if "ENTRY_DELETED" in change_types:
-                yield path, snapshot, lin
+        # Use match_files_by_snapshot directly so no checkpoint is written.
+        for document in self.match_files_by_snapshot(snapshot_id=0):
+            file_path = document["_source"]["data"]["path"]
+            snapshot = int(document["_source"]["metadata"]["snapshots"]["s2"])
+            lin = int(document["_source"]["data"]["lin"])
+            yield Path(file_path), snapshot, lin
