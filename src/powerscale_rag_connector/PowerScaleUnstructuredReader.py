@@ -34,6 +34,7 @@ class PowerScaleUnstructuredReader(BaseReader):
         mode: str = "single",
         languages: Optional[List[str]] = None,
         force_scan: bool = False,
+        raise_on_error: bool = False,
         verify_ssl: bool = True,
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
@@ -48,6 +49,8 @@ class PowerScaleUnstructuredReader(BaseReader):
             mode: Reader mode; "single" keeps file as one doc, "elements" yields element-level docs.
             languages: List of language codes for OCR hints (e.g. ["en"]). Defaults to ["en"].
             force_scan: Force scanning all data regardless of state
+            raise_on_error: If True, re-raise parse errors after logging. If False (default),
+                errors are logged and the generator continues with the next file.
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
             app_version: A version number for the checkpoint document. Defaults to 1.
@@ -57,6 +60,7 @@ class PowerScaleUnstructuredReader(BaseReader):
         self.__split_documents = (mode == "elements")  # map mode string to LlamaIndex split_documents flag
         self.__languages = languages if languages is not None else ["en"]
         self.__force_scan = force_scan
+        self.__raise_on_error = raise_on_error
         self.__verify_ssl = verify_ssl
         self.__app_name = app_name
         self.__app_version = app_version
@@ -95,12 +99,12 @@ class PowerScaleUnstructuredReader(BaseReader):
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", message="'doc_id' is deprecated")
                     docs = reader.load_data(
-                        file=Path(str(file_path)),
+                        file=Path(file_path),
                         split_documents=self.__split_documents,
                         unstructured_kwargs={"languages": self.__languages},
                     )
                 for doc in docs:
-                    metadata = (doc.metadata or {})
+                    metadata = doc.metadata or {}
                     metadata["source"] = str(file_path)
                     metadata["snapshot"] = snapshot
                     metadata["lin"] = lin
@@ -110,4 +114,6 @@ class PowerScaleUnstructuredReader(BaseReader):
             except Exception as e:
                 _logger.error("Error loading file %s (snapshot=%s, changes=%s): %s",
                               file_path, snapshot, change_types, e)
+                if self.__raise_on_error:
+                    raise
 

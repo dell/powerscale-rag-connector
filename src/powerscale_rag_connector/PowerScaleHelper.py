@@ -227,24 +227,32 @@ class PowerScaleHelper:
         # not found, return -1
         return -1
 
-    def get_saved_mtime(self) -> int:
-        """Look up last processed max mtime for current path and version"""
+    def _get_saved_mtime_optional(self) -> Optional[int]:
+        """Look up last processed max mtime, returning None when the field is absent.
+
+        Distinguishes an old v1 checkpoint that did not store saved_mtime from a
+        genuine saved_mtime value of 0.
+        """
         if self.__last_state is None:
             self.get_checkpoint()
 
         try:
             checkpoints = self.__last_state[self.__checkpoint_root]
         except KeyError:
-            return 0
+            return None
 
         for ckpt in checkpoints:
             if (
                 ckpt[self.__checkpoint_key] == self.__checkpoint_value
                 and ckpt.get("version") == self.__app_version
             ):
-                return ckpt.get("saved_mtime", 0)
+                return ckpt.get("saved_mtime")
 
-        return 0
+        return None
+
+    def get_saved_mtime(self) -> int:
+        """Look up last processed max mtime for current path and version"""
+        return self._get_saved_mtime_optional() or 0
 
     def init_checkpoint_doc(self) -> Dict[str, Any]:
         """Return a new checkpoint document with the known root keys.
@@ -254,7 +262,7 @@ class PowerScaleHelper:
         return {"folder_paths": [], "datasets": [], "input_files": []}
 
     def save_checkpoint(self) -> None:
-        """Create or Update the last run numbers for so future calls know where we last indexed"""
+        """Create or Update the last run numbers so future calls know where we last indexed"""
         if self.__latest_snapshot_id < 0:
             _logger.warning(
                 "Skipping checkpoint write: latest_snapshot_id is invalid (%d), "
@@ -465,9 +473,16 @@ class PowerScaleHelper:
         return self.es_search_paged(query=query)
 
     def get_directory_changes(
-        self, snapshot_id: int = -1
+        self, snapshot_id: int = -1, save_checkpoint: bool = True
     ) -> Iterator[Tuple[Path, int, int, List[str]]]:
         """Return iterator of tuples of (Path, snapshot, lin, change_types) for files in the current path
+
+        Args:
+            snapshot_id: snapshot to start from; negative means use the saved checkpoint.
+            save_checkpoint: when True (default) the checkpoint is written once the
+                generator is exhausted. Callers that need to perform additional work
+                (such as parsing documents) before the checkpoint should be committed
+                can set this to False and call :meth:`save_checkpoint` themselves.
 
         Returns:
             Iterator yielding tuples containing:
@@ -481,10 +496,11 @@ class PowerScaleHelper:
             # Main repo style: first run only when the caller explicitly uses the
             # default negative snapshot_id AND no checkpoint exists yet.
             is_first_run = snapshot_id < 0 and self.get_snapshot_id() < 0
-            saved_mtime = self.get_saved_mtime()
+            raw_saved_mtime = self._get_saved_mtime_optional()
+            saved_mtime = raw_saved_mtime if raw_saved_mtime is not None else 0
             self.__max_mtime = saved_mtime  # preserve previous value if scan returns no results
             for document in self.match_files_by_snapshot(snapshot_id):
-                _logger.debug("ES return the following document: %s", document)
+                _logger.debug("ES returned the following document: %s", document)
                 file_path = document["_source"]["data"]["path"]
                 snapshot = int(document["_source"]["metadata"]["snapshots"]["s2"])
                 lin = int(document["_source"]["data"]["lin"])
@@ -498,20 +514,26 @@ class PowerScaleHelper:
                 # checkpoint, the file must have been created after the previous run and
                 # MetadataIQ tagged it ENTRY_MODIFIED because it was also written before we
                 # scanned. Reclassify as ENTRY_ADDED so callers treat it as a new file.
-                if "ENTRY_MODIFIED" in change_types and btime > saved_mtime:
+                # A missing saved_mtime (None) indicates an old v1 checkpoint; do not
+                # reclassify in that case to avoid treating every modification as an add.
+                if (
+                    "ENTRY_MODIFIED" in change_types
+                    and raw_saved_mtime is not None
+                    and btime > saved_mtime
+                ):
                     change_types = ["ENTRY_ADDED"]
                 self.__max_mtime = max(self.__max_mtime, mtime)
                 yield Path(file_path), snapshot, lin, change_types
             search_success = True  # only reached if loop ran to completion
         except Exception as e:
             _logger.error(
-                "get_directory_changes() failed: scan incomplete, checkpoint not updated, "
-                "0 results returned. Error: %s",
-                str(e),
+                "get_directory_changes() failed: scan incomplete, checkpoint not updated. "
+                "Error: %s",
+                e,
                 exc_info=True,
             )
         finally:
-            if search_success:
+            if search_success and save_checkpoint:
                 self.save_checkpoint()
 
     def get_new_files(self, snapshot_id: int = -1) -> Iterator[Tuple[Path, int, int]]:
@@ -537,7 +559,7 @@ class PowerScaleHelper:
         """Return iterator of all files matching the configured path/dataset scope.
 
         Triggers a scan with snapshot_id=0, ignoring any saved checkpoint. The
-        query uses ``metadata.snapshots.s2 > 0`` ( MetadataIQ snapshot 0 is not
+        query uses ``metadata.snapshots.s2 > 0`` (MetadataIQ snapshot 0 is not
         included), but all remaining files are returned regardless of change type
         (ENTRY_ADDED, ENTRY_MODIFIED, etc.), unlike get_new_files() which only
         yields files that were added.

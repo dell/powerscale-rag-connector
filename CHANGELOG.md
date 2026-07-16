@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`fs` parameter in `PowerScaleSimpleDirectoryReader`**: accepts an optional `fsspec.AbstractFileSystem` for custom filesystem support, matching `SimpleDirectoryReader` API compatibility.
+- **`raise_on_error` parameter in `PowerScaleUnstructuredLoader` and `PowerScaleUnstructuredReader`**: controls whether parse errors are re-raised (True) or logged and skipped (False, default). Provides consistent error handling across all loaders and readers.
+
 ### Changed
 
 - **`get_deleted_files()` now raises `NotImplementedError`**: MetadataIQ does not emit `ENTRY_DELETED` events in the current OneFS firmware version, so this helper no longer silently returns an empty iterator. This is a breaking API change; callers should catch `NotImplementedError` or stop using the method until MetadataIQ supports delete events.
@@ -31,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`exclude_empty` now enforced in `PowerScaleSimpleDirectoryReader`**: zero-byte files are now correctly filtered when `exclude_empty=True`. Previously the parameter was stored but not checked during file filtering.
+- **`PowerScaleSimpleDirectoryReader` now uses `self.fs` for all filesystem operations**: existence checks during initialization and filtering now use the configured `fsspec.AbstractFileSystem` instead of `os.path`, ensuring consistency with the base `SimpleDirectoryReader` behavior.
 - **`refresh_dataset()` missing `None` guard restored**: calling `refresh_dataset()` on a folder-path-scoped helper (where `dataset_name=None`) now returns `{}` instead of crashing with `TypeError` when passing `None` to `Elasticsearch.get(id=None)`.
 - **Lazy import returned the module instead of the class**: `from powerscale_rag_connector import PowerScaleDocumentLoader` (and the other lazily-loaded classes) resolved to the submodule rather than the class because `importlib.import_module` binds the same-named submodule onto the package. This made `PowerScaleDocumentLoader(...)` raise `TypeError: 'module' object is not callable`, breaking every framework example. `__getattr__` now caches the resolved class onto the package namespace.
 - **Missing `import time` in `powerscale_nvingest_pathloader.py`**: the example referenced `time.time()` without importing `time`, raising `NameError` at runtime.
@@ -42,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`update_latest_snapid` elasticsearch client compatibility**: removed the deprecated `body=` keyword in favor of direct `aggs=` / `size=` kwargs, compatible with `elasticsearch>=8,<9`.
 - **`init_checkpoint_doc` placeholder rows**: removed hardcoded `__empty_*__` placeholder entries that could have leaked into checkpoint documents.
 - **`PowerScaleSimpleDirectoryReader` base-attribute initialization**: `self.fs` and `self.file_metadata` are now initialized to the same defaults as `SimpleDirectoryReader` (`get_default_fs()` and `_DefaultFileMetadataFunc(self.fs)`) and `self.exclude` is set from the constructor parameter, fixing inherited base methods that rely on these attributes.
+- **v1 checkpoint migration for `saved_mtime`**: `PowerScaleHelper` now tracks whether a checkpoint actually contains a `saved_mtime` value. Old v1 checkpoints that lack the field are no longer treated as `saved_mtime = 0`, preventing `ENTRY_MODIFIED` events from being incorrectly reclassified as `ENTRY_ADDED`.
+- **`PowerScaleSimpleDirectoryReader` checkpoint and parsing ordering**: the checkpoint is now written only after the inner `SimpleDirectoryReader` has successfully parsed the selected files. A new `raise_on_error` parameter (default `True`) is propagated to the inner reader, so parse errors cause the run to fail before the checkpoint advances, preventing silent ingestion loss.
+- **`input_files` scope restricted to exact requested files**: `PowerScaleSimpleDirectoryReader._filter` now verifies that paths returned by the Elasticsearch `match_phrase` query are actually in the requested `input_files` list, avoiding descendant-path false matches.
+- **`recursive=False` now enforced**: `PowerScaleSimpleDirectoryReader._filter` drops files whose parent directory is not the configured `input_dir` when `recursive=False`.
+- **`get_directory_changes` checkpoint control**: `get_directory_changes` now accepts an optional `save_checkpoint` parameter so callers can defer the checkpoint write until after downstream work completes.
 
 ## [2.0.0] - 2026-07-11
 

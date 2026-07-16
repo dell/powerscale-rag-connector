@@ -23,6 +23,7 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         dataset_name: Optional[str] = None,
         chunking_strategy: Optional[str] = None,
         force_scan: bool = False,
+        raise_on_error: bool = False,
         verify_ssl: bool = True,
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
@@ -41,6 +42,8 @@ class PowerScaleUnstructuredLoader(BaseLoader):
                 Document per file), use chunking_strategy="basic" with a large max_characters
                 value set via the unstructured library.
             force_scan: Force scanning all data regardless of state
+            raise_on_error: If True, re-raise parse errors after logging. If False (default),
+                errors are logged and the generator continues with the next file.
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
             app_version: A version number for the checkpoint document. Defaults to 1.
@@ -49,6 +52,7 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         self.__dataset_name = dataset_name
         self.__chunking_strategy = chunking_strategy
         self.__force_scan = force_scan
+        self.__raise_on_error = raise_on_error
         self.__verify_ssl = verify_ssl
         self.__app_name = app_name
         self.__app_version = app_version
@@ -85,3 +89,5 @@ class PowerScaleUnstructuredLoader(BaseLoader):
                     yield doc
             except Exception as e:
                 _logger.error("Error loading file %s: %s", file_path, e)
+                if self.__raise_on_error:
+                    raise

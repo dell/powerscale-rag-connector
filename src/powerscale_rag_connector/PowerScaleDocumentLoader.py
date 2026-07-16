@@ -56,9 +56,7 @@ class PowerScaleDocumentLoader(BaseLoader):
         self.__verify_ssl = verify_ssl
         self.__app_name = app_name
         self.__app_version = app_version
-        self.__pshelper: Optional[PowerScaleHelper] = (
-            None  # defer initialization until first use via __helper property
-        )
+        self.__pshelper: Optional[PowerScaleHelper] = None  # defer initialization until first use via __helper property
 
     @property
     def __helper(self) -> PowerScaleHelper:

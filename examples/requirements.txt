@@ -8,5 +8,5 @@ llama-index-readers-file
 llama-index-embeddings-nvidia
 llama-index-vector-stores-elasticsearch
 unstructured
-nv_ingest_client==25.9.0
+nv-ingest-client==25.9.0
 powerscale_rag_connector==2.0.0
