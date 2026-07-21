@@ -1,7 +1,10 @@
-# PowerScaleUnstructuredReader.py
+"""PowerScale LlamaIndex UnstructuredReader.
 
-"""Module providing a LlamaIndex UnstructuredReader that uses Dell PowerScale MetadataIQ
-to efficiently find files that have changed.
+Identifies files that changed since the last checkpoint and extracts their
+contents with ``llama_index.readers.file.UnstructuredReader``.  Each returned
+``Document`` contains the extracted text in ``text`` and PowerScale metadata
+(``source``, ``snapshot``, ``lin``, ``change_types``).  Files missing from the
+local filesystem are skipped with a warning.
 """
 
 import logging
@@ -19,9 +22,10 @@ _logger = logging.getLogger(__name__)
 
 
 class PowerScaleUnstructuredReader(BaseReader):
-    """
-    Loads files via LlamaIndex's UnstructuredReader, leveraging PowerScale MetadataIQ
-    to efficiently find files that have changed.
+    """PowerScale LlamaIndex UnstructuredReader.
+
+    Loads files via LlamaIndex's ``UnstructuredReader``, leveraging
+    PowerScale MetadataIQ to efficiently find files that have changed.
     """
 
     def __init__(
@@ -34,7 +38,7 @@ class PowerScaleUnstructuredReader(BaseReader):
         mode: str = "single",
         languages: Optional[List[str]] = None,
         force_scan: bool = False,
-        raise_on_error: bool = False,
+        raise_on_error: bool = True,
         verify_ssl: bool = True,
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
@@ -49,8 +53,8 @@ class PowerScaleUnstructuredReader(BaseReader):
             mode: Reader mode; "single" keeps file as one doc, "elements" yields element-level docs.
             languages: List of language codes for OCR hints (e.g. ["en"]). Defaults to ["en"].
             force_scan: Force scanning all data regardless of state
-            raise_on_error: If True, re-raise parse errors after logging. If False (default),
-                errors are logged and the generator continues with the next file.
+            raise_on_error: If True (default), re-raise parse errors after logging.
+                If False, errors are logged and the generator continues with the next file; the checkpoint still advances after the run completes.
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
             app_version: A version number for the checkpoint document. Defaults to 1.
@@ -65,9 +69,6 @@ class PowerScaleUnstructuredReader(BaseReader):
         self.__app_name = app_name
         self.__app_version = app_version
 
-        # LlamaIndex Unstructured reader is created lazily on first use.
-        self._reader = None
-
         self.path_loader = PowerScalePathLoader(
             es_host_url=es_host_url,
             es_index_name=es_index_name,
@@ -80,19 +81,15 @@ class PowerScaleUnstructuredReader(BaseReader):
             app_version=self.__app_version,
         )
 
-    def load_data(self) -> List[Document]:
+    def load_data(self, show_progress: bool = False) -> List[Document]:
         return list(self.lazy_load_data())
 
     def lazy_load_data(self) -> Iterator[Document]:
         """
         Lazily yield LlamaIndex Documents from files discovered by PowerScalePathLoader.
         """
-        reader = self._reader
-        if reader is None:
-            reader = UnstructuredReader()
-            self._reader = reader
-
         for file_path, snapshot, lin, change_types in self.path_loader.lazy_load():
+            reader = UnstructuredReader()
             try:
                 # Suppress LlamaIndex doc_id deprecation warning emitted during load;
                 # scoped here so it does not affect any other code in the process.
@@ -116,4 +113,6 @@ class PowerScaleUnstructuredReader(BaseReader):
                               file_path, snapshot, change_types, e)
                 if self.__raise_on_error:
                     raise
+        # Only commit the checkpoint once all files have been processed.
+        self.path_loader.save_checkpoint()
 

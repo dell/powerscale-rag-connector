@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`fs` parameter in `PowerScaleSimpleDirectoryReader`**: accepts an optional `fsspec.AbstractFileSystem` for custom filesystem support, matching `SimpleDirectoryReader` API compatibility.
-- **`raise_on_error` parameter in `PowerScaleUnstructuredLoader` and `PowerScaleUnstructuredReader`**: controls whether parse errors are re-raised (True) or logged and skipped (False, default). Provides consistent error handling across all loaders and readers.
+- **`raise_on_error` parameter in `PowerScaleUnstructuredLoader`, `PowerScaleUnstructuredReader`, and `PowerScaleSimpleDirectoryReader`**: controls whether parse errors are re-raised (True, default) or logged and skipped (False). Provides consistent, safe error handling across all loaders and readers.
+- **`dataset_name` parameter in `PowerScaleSimpleDirectoryReader`**: supports MetadataIQ dataset definitions as a third selection scope alongside `input_dir` and `input_files`.
 
 ### Changed
 
@@ -19,10 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Environment validation in nvingest examples**: `NV_INGEST_ENDPOINT`, `NV_INGEST_PORT`, `FOLDER_PATH`, and `INPUT_DIR` are now validated with `_require_env()` on import, producing clear error messages when required variables are missing.
 - **`requirements.txt` now uses `python-dotenv` instead of `dotenv`**: the `dotenv` package name does not provide the `dotenv.load_dotenv` import used by the examples; `python-dotenv` is the correct dependency.
 - **Standardized `force_scan` parameter documentation**: all loaders and readers now use the same `force_scan: Force scanning all data regardless of state` docstring.
-- **`PowerScaleUnstructuredLoader` performance**: a single `UnstructuredLoader` instance is now created at initialization and reused for each file by updating `file_path`, instead of creating one loader per file.
+- **`PowerScaleUnstructuredLoader` per-file instantiation**: an `UnstructuredLoader` instance is created for each file as it is processed, because the underlying loader ties `file_path` to its construction. A future optimization could reuse a single instance if `langchain-unstructured` supports updating `file_path` after initialization.
+- **`PowerScaleDocumentLoader` and `PowerScaleSimpleDirectoryReader` now skip missing files returned by MetadataIQ**: `PowerScaleDocumentLoader` checks `os.path.isfile` before yielding a metadata-only `Document`, and `PowerScaleSimpleDirectoryReader._filter` drops files that do not exist on the configured `fsspec` filesystem. `PowerScaleUnstructuredLoader` and `PowerScaleUnstructuredReader` rely on the underlying parser raising for missing files, controlled by `raise_on_error`.
 - **Elasticsearch dependency pinned**: `pyproject.toml` and `requirements.txt` now require `elasticsearch>=8,<9` to ensure compatibility with the Elasticsearch 8.x API.
 - **`langchain` extra updated**: replaced `langchain-community` with `langchain-unstructured` (and `langchain-core`); `PowerScaleUnstructuredLoader` migrated to the new `langchain-unstructured` `UnstructuredLoader` and the `chunking_strategy` parameter. This is a breaking change for callers that previously passed `mode=` to `PowerScaleUnstructuredLoader`.
-- **`llamaindex` extra updated**: now includes `llama-index-readers-file` and `unstructured`, which `PowerScaleUnstructuredReader` requires at runtime.
+- **`llamaindex` extra updated**: now includes `llama-index-readers-file` and `unstructured[pdf]`, which `PowerScaleUnstructuredReader` requires at runtime.
 - **`test` optional extra and pytest configuration added**: `pyproject.toml` now defines `project.optional-dependencies.test = ["pytest>=7"]` and `[tool.pytest.ini_options]` with `testpaths = ["tests"]` and `pythonpath = ["src"]`.
 - **README and examples README updated**: `README.md` now includes `PowerScaleUnstructuredLoader` usage and a deprecation note for `langchain-community`'s `UnstructuredFileLoader`; `examples/README.md` lists per-example package requirements and clearer LlamaIndex vectorstore instructions.
 
@@ -30,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Unit test suite (`tests/`)**: offline pytest coverage for `PowerScaleHelper`, `PowerScalePathLoader`, `PowerScaleDocumentLoader`, `PowerScaleSimpleDirectoryReader`, the Unstructured loader/reader, and the package's lazy-import surface. Uses a `FakeElasticsearch`; framework-specific tests skip automatically when optional extras are not installed. Run with `pip install -e ".[test]"` then `pytest`.
 - **Auto-install optional test dependencies**: `tests/conftest.py` now checks for missing optional framework packages (`langchain-core`, `langchain-unstructured`, `llama-index`, `llama-index-readers-file`, `unstructured`) at the start of a test session and installs them with `pip` unless `--no-install-extras` is passed. This lets the full suite run by default without manually installing extras first.
-- **`unstructured` added to `llamaindex` and `all` extras**: `llama-index-readers-file`'s `UnstructuredReader` requires the `unstructured` package at runtime, so it is now included in the optional dependency sets.
+- **`unstructured[pdf]` added to `llamaindex` and `all` extras**: `llama-index-readers-file`'s `UnstructuredReader` requires the `unstructured[pdf]` extra at runtime for PDF parsing, so it is now included in the optional dependency sets.
 - **`PowerScaleHelper.get_all_files()` restored**: convenience method that calls `match_files_by_snapshot(snapshot_id=0)` and returns all regular files in scope (snapshot > 0) regardless of checkpoint, without writing a checkpoint. Removed in a previous refactor; restored for backwards compatibility.
 - **`dataset_name` test coverage** (`tests/test_helper_dataset.py`): 12 new tests covering dataset definition lookup, `NotFoundError` propagation, checkpoint root, `build_query` with dataset scope, `get_directory_changes` end-to-end with a dataset, `refresh_dataset()`, and `get_all_files()`.
 
@@ -44,7 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Deprecated `body=` in nvingest example deletes**: `delete_by_lin` in the LangChain and LlamaIndex nvingest examples now uses the `query=` kwarg, compatible with `elasticsearch>=8,<9`.
 - **`get_snapshot_id()` state regression**: restored the `__last_state is None` guard so repeated calls after a missing checkpoint root no longer crash with `TypeError: 'NoneType' object is not subscriptable`.
 - **`match_files_by_snapshot` force-scan / first-run query**: aligned with main-repo style by always using `all_files=False`, so the snapshot range filter is applied consistently. `force_scan` and first-run queries use `metadata.snapshots.s2 > snapshot_id` and `metadata.snapshots.s2 <= latest_snapshot_id`.
-- **`num_files_limit` silent data loss**: `PowerScaleSimpleDirectoryReader` now stops the file generator early when the limit is reached and does not advance the checkpoint, preventing files from being dropped without being yielded.
 - **`save_checkpoint` brand-new-entry edge case**: `state_snapshot_id` now defaults to `-1` so a fresh checkpoint with `latest_snapshot_id = 0` is still written.
 - **`update_latest_snapid` elasticsearch client compatibility**: removed the deprecated `body=` keyword in favor of direct `aggs=` / `size=` kwargs, compatible with `elasticsearch>=8,<9`.
 - **`init_checkpoint_doc` placeholder rows**: removed hardcoded `__empty_*__` placeholder entries that could have leaked into checkpoint documents.
@@ -54,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`input_files` scope restricted to exact requested files**: `PowerScaleSimpleDirectoryReader._filter` now verifies that paths returned by the Elasticsearch `match_phrase` query are actually in the requested `input_files` list, avoiding descendant-path false matches.
 - **`recursive=False` now enforced**: `PowerScaleSimpleDirectoryReader._filter` drops files whose parent directory is not the configured `input_dir` when `recursive=False`.
 - **`get_directory_changes` checkpoint control**: `get_directory_changes` now accepts an optional `save_checkpoint` parameter so callers can defer the checkpoint write until after downstream work completes.
+- **`PowerScaleHelper` folder-path query no longer truncates large directories**: replaced `match_phrase_prefix` with `match_phrase` for `data.path` prefix matching. Elasticsearch's `match_phrase_prefix` query has a default `max_expansions` of 50, which silently dropped all but the first 50 files under any directory prefix. `match_phrase` matches the analyzed token sequence without expansion, so directories with more than 50 files are now fully scanned.
+- **`dataset_name` now works with any valid Elasticsearch query**: `PowerScaleHelper.build_query` wraps non-`bool` dataset definitions in `bool.must` and normalizes `bool.must` to a list before appending the `data.file_type` and snapshot-range filters. Previously, dataset definitions with `bool.must` as a single dict or with a list of clauses produced invalid DSL and failed.
 
 ## [2.0.0] - 2026-07-11
 

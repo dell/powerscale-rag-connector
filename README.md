@@ -141,7 +141,7 @@ for doc in loader.lazy_load():
 
 ### Using as a LlamaIndex Reader
 
-Two LlamaIndex readers are available. **`PowerScaleSimpleDirectoryReader`** wraps LlamaIndex's `SimpleDirectoryReader` filtered to changed files:
+Two LlamaIndex readers are available. **`PowerScaleSimpleDirectoryReader`** wraps LlamaIndex's `SimpleDirectoryReader` filtered to changed files. It supports three mutually exclusive selection scopes: `input_dir`, `input_files`, or `dataset_name` (a MetadataIQ dataset definition in Elasticsearch):
 
 ```python
 from powerscale_rag_connector import PowerScaleSimpleDirectoryReader
@@ -151,6 +151,7 @@ reader = PowerScaleSimpleDirectoryReader(
     es_index_name="isi-metadataiq-index.cluster.guid",
     es_api_key="your-encoded-api-key",
     input_dir="/ifs/data"
+    # Alternatively use input_files=[...] or dataset_name="my_dataset"
 )
 
 for doc in reader.lazy_load_data():
@@ -173,6 +174,15 @@ reader = PowerScaleUnstructuredReader(
 
 documents = reader.load_data()
 ```
+
+### Common reader/loader parameters
+
+All loaders/readers that parse file content share a PowerScale-specific `raise_on_error` switch. The default is `True` for all of them:
+
+- `PowerScaleUnstructuredLoader` / `PowerScaleUnstructuredReader`: `raise_on_error` (default `True`). If a file fails to parse, the exception is re-raised and ingestion stops; the checkpoint is not advanced. Set it to `False` to log the error and continue with the next file.
+- `PowerScaleSimpleDirectoryReader`: `raise_on_error` (default `True`). Parse errors are re-raised and the checkpoint is not advanced, so the run can be retried. Set it to `False` to log and skip parse errors; the checkpoint will still advance at the end of the run.
+
+When `raise_on_error` is `True` (default), the checkpoint is only advanced after all selected files have been successfully processed. When `raise_on_error` is `False`, failed files are skipped and the checkpoint advances at the end of the run, meaning failed files are not retried.
 
 ### Using as a Standalone Path Loader
 

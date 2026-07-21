@@ -45,7 +45,6 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
-
 from dotenv import load_dotenv
 
 from llama_index.core.schema import TextNode
@@ -82,7 +81,7 @@ VECTORSTORE_INDEX = os.getenv("VECTORSTORE_INDEX", "rag_vectors")
 VECTORSTORE_ES_URL = os.getenv("VECTORSTORE_ES_URL", "http://localhost:9200").rstrip("/")
 ES_API_KEY = _require_env("ES_API_KEY")
 INPUT_DIR = os.path.normpath(_require_env("INPUT_DIR"))
-VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() == "true"
+VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 
 NV_INGEST_ENDPOINT = _require_env("NV_INGEST_ENDPOINT")
 NV_INGEST_PORT = int(_require_env("NV_INGEST_PORT"))
@@ -116,10 +115,6 @@ def get_embed_model() -> NVIDIAEmbedding:
 
 def run_nvingest(file_path: Path) -> List[Dict[str, Any]]:
     """Process a file through NvIngest v2 and return extracted text chunks."""
-    if not file_path.exists():
-        logger.error("File does not exist: %s", file_path)
-        return []
-
     ingestor = Ingestor(
         message_client_allocator=RestClient,
         message_client_hostname=NV_INGEST_ENDPOINT,
@@ -228,20 +223,34 @@ def process_changed_files() -> None:
     )
 
     file_count = success_count = error_count = 0
+    processed_sources = set()  # Track processed files to avoid duplicates
 
+    # IMPORTANT: Errors during processing will abort the loop and prevent checkpoint
+    # advancement. The loader will retry failed files on the next run. If you want to
+    # skip errors and advance the checkpoint anyway, wrap this loop in try/except and
+    # consume the entire generator even when errors occur.
+    #
+    # NOTE: SimpleDirectoryReader can emit multiple Documents per file (e.g., PDF readers).
+    # We deduplicate by source to avoid sending the same file to NvIngest multiple times.
     for document in loader.lazy_load_data():
-        file_count += 1
         filepath = Path(document.metadata.get("source", ""))
         lin = document.metadata.get("lin", 0)
         change_types = document.metadata.get("change_types", [])
 
+        # Skip if we've already processed this source file in this run
+        source_key = str(filepath)
+        if source_key in processed_sources:
+            continue
+        processed_sources.add(source_key)
+
+        file_count += 1
         logger.info("Processing file %d: %s (lin=%d, change_types=%s)", file_count, filepath, lin, change_types)
 
         chunks = run_nvingest(filepath)
         if not chunks:
-            logger.warning("No chunks produced for %s, skipping", filepath)
+            logger.error("No chunks produced for %s - aborting to prevent checkpoint advancement", filepath)
             error_count += 1
-            continue
+            raise RuntimeError(f"NvIngest failed for {filepath}")
 
         if "ENTRY_MODIFIED" in change_types:
             deleted = delete_by_lin(vector_store, lin)
@@ -251,7 +260,9 @@ def process_changed_files() -> None:
         if added > 0:
             success_count += 1
         else:
+            logger.error("Failed to add chunks for %s - aborting to prevent checkpoint advancement", filepath)
             error_count += 1
+            raise RuntimeError(f"Vector store add failed for {filepath}")
 
     logger.info("Processing complete: %d files, %d successful, %d errors", file_count, success_count, error_count)
     asyncio.run(_close_store(vector_store))

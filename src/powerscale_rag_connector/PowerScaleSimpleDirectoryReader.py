@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import os
 import logging
@@ -6,7 +8,6 @@ from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Set, Tuple
 
-import fsspec
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.readers.file.base import BaseReader, get_default_fs, _DefaultFileMetadataFunc
 from llama_index.core.schema import Document
@@ -17,16 +18,10 @@ _logger = logging.getLogger(__name__)
 
 
 class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
-    """LlamaIndex SimpleDirectoryReader using Dell PowerScale MetadataIQ.
+    """PowerScale LlamaIndex SimpleDirectoryReader.
 
-    - `input_dir` mode: uses PowerScaleHelper.get_directory_changes().
-    - `input_files` mode: uses PowerScaleHelper.get_directory_changes() with helper configured for input_files.
-    - Exclusions, required extensions, hidden filtering, and local existence checks are applied
-      before delegating to an inner SimpleDirectoryReader to read file contents.
-
-    Note: The PowerScale share must be mounted locally. Both `input_dir` and `input_files`
-    paths are checked for local existence at init time, and file contents are read directly
-    from the local mount during load. MetadataIQ is used only for change detection.
+    Loads files via LlamaIndex's ``SimpleDirectoryReader``, leveraging
+    PowerScale MetadataIQ to efficiently find files that have changed.
     """
 
     def __init__(
@@ -36,6 +31,7 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         es_api_key: str,
         input_dir: Optional[str] = None,
         input_files: Optional[List[str]] = None,
+        dataset_name: Optional[str] = None,
         exclude: Optional[List[str]] = None,
         recursive: bool = True,
         verify_ssl: bool = True,
@@ -48,7 +44,6 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         encoding: str = "utf-8",
         errors: str = "ignore",
         required_exts: Optional[List[str]] = None,
-        num_files_limit: Optional[int] = None,
         exclude_hidden: bool = True,
         exclude_empty: bool = False,
         raise_on_error: bool = True,
@@ -56,44 +51,46 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
     ) -> None:
         """Initialize the reader with a PowerScale-backed selection scope.
 
+        Args marked ``(optional, inherited)`` are optional and come from
+        LlamaIndex's ``SimpleDirectoryReader``.
+
         Args:
             es_host_url: URI of the Elasticsearch database incl. port (e.g. http://localhost:9200)
             es_index_name: name of the Elasticsearch index
             es_api_key: api_key for Elasticsearch in hashed (encoded) form
-            input_dir: Folder scope to scan; mutually exclusive with `input_files`
-            input_files: Explicit list of files to check/load; mutually exclusive with `input_dir`
-            exclude: Glob patterns of file paths to skip before reading (e.g. ["*.tmp", "/ifs/data/**/temp.*"])
-            recursive: Passed to the base SimpleDirectoryReader (folder mode semantics)
-            verify_ssl: Whether to verify SSL certificates for the Elasticsearch client
-            force_scan: Force scanning all data regardless of state
-            app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
-            app_version: A version number for the checkpoint document. Defaults to 1.
-            file_extractor: Optional mapping of extension → extractor for the inner reader
-            file_metadata: Optional callback that returns per-file metadata dicts
-            filename_as_id: Use filename as the document id
-            encoding: Text encoding hint for the inner reader
-            errors: Encoding error handling strategy ("ignore", "strict", etc.).
-            required_exts: Only include files whose extension is in this list (e.g., [".pdf"]).
-            num_files_limit: Maximum number of files to read this run.
-            exclude_hidden: Skip files whose path contains any hidden component. Defaults to True, matching LlamaIndex's SimpleDirectoryReader.
-            exclude_empty: Skip files with zero bytes. Defaults to False, matching LlamaIndex's SimpleDirectoryReader.
-            raise_on_error: If True (default), the inner SimpleDirectoryReader raises on parse errors and the checkpoint is not advanced, so the run can be retried. If False, parse errors are logged and skipped; the checkpoint still advances after successful files.
-            fs: File system to use. Defaults to local filesystem. Can be any fsspec.AbstractFileSystem.
+            input_dir: Folder scope to scan; mutually exclusive with `input_files` and `dataset_name`
+            input_files: Explicit list of files to check/load; mutually exclusive with `input_dir` and `dataset_name`
+            dataset_name: MetadataIQ dataset name scope; mutually exclusive with `input_dir` and `input_files`
+            exclude: (optional, inherited) Glob patterns to skip before reading (e.g. ["*.tmp", "/ifs/data/**/temp.*"]). Defaults to None.
+            recursive: (optional, inherited) Scan subdirectories when using `input_dir`. Defaults to True.
+            verify_ssl: Whether to verify SSL certificates for Elasticsearch. Defaults to True.
+            force_scan: Force scanning all data regardless of state. Defaults to False.
+            app_name: Application name for the checkpoint document. Defaults to "powerscale_rag_connector".
+            app_version: Version number for the checkpoint document. Defaults to 1.
+            file_extractor: (optional, inherited) Extension → extractor mapping. Defaults to None.
+            file_metadata: (optional, inherited) Callback returning per-file metadata. Defaults to None.
+            filename_as_id: (optional, inherited) Use filename as document id. Defaults to False.
+            encoding: (optional, inherited) Text encoding hint. Defaults to "utf-8".
+            errors: (optional, inherited) Encoding error handling strategy. Defaults to "ignore".
+            required_exts: (optional, inherited) Only include files with these extensions (e.g. [".pdf"]). Defaults to None.
+            exclude_hidden: (optional, inherited) Skip hidden path components. Defaults to True.
+            exclude_empty: (optional, inherited) Skip zero-byte files. Defaults to False.
+            raise_on_error: (optional, inherited) If True (default), the inner reader raises on parse errors and the checkpoint is not advanced, so the run can be retried. If False, errors are logged and skipped; the checkpoint still advances after the run completes.
+            fs: (optional, inherited) File system to use. Defaults to local.
         """
-        # Normalize paths before validation and before passing to the base reader so
-        # the PowerScale helper and the inner SimpleDirectoryReader agree on the
-        # canonical path representation.
+        # Normalize paths so the MetadataIQ helper and the local filesystem checks use
+        # the same canonical representation.
         norm_input_dir = os.path.normpath(input_dir) if input_dir is not None else None
         norm_input_files = (
             [os.path.normpath(p) for p in input_files] if input_files is not None else None
         )
 
-        # Initialize fs before validation so we can use it for existence checks
+        # Set the filesystem before validation to support existence checks.
         self.fs = fs or get_default_fs()
 
         # Validate scope
-        if (norm_input_dir is None) == (norm_input_files is None):
-            raise ValueError("Select exactly one of `input_dir` or `input_files`.")
+        if sum(x is not None for x in (norm_input_dir, norm_input_files, dataset_name)) != 1:
+            raise ValueError("Select exactly one of `input_dir`, `input_files`, or `dataset_name`.")
         if norm_input_files == []:
             raise ValueError("input_files cannot be empty")
         if norm_input_dir and not norm_input_dir.startswith("/ifs"):
@@ -104,13 +101,9 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
             for p in norm_input_files:
                 if not p.startswith("/ifs"):
                     raise ValueError(f"input_files path must start with '/ifs': {p}")
-                if not self.fs.isfile(p):
-                    raise ValueError(f"File does not exist: {p}")
 
-        # Avoid calling SimpleDirectoryReader.__init__ because it performs a
-        # local filesystem walk in _add_files(). Use super() to call the next
-        # base class __init__ in the MRO, which initializes BaseReader state
-        # without touching the filesystem.
+        # SimpleDirectoryReader.__init__ would walk the local filesystem in _add_files().
+        # Initialize BaseReader directly to defer file discovery to MetadataIQ.
         super(SimpleDirectoryReader, self).__init__()
 
         self.errors = errors
@@ -120,21 +113,24 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         self.exclude_hidden = exclude_hidden
         self.exclude_empty = exclude_empty
         self.required_exts = required_exts
-        self.num_files_limit = num_files_limit
         self.raise_on_error = raise_on_error
         self.file_extractor = file_extractor or {}
         self.file_metadata = file_metadata or _DefaultFileMetadataFunc(self.fs)
         self.filename_as_id = filename_as_id
 
-        # Public SimpleDirectoryReader path attributes. For input_dir mode we do
-        # not populate input_files because the PowerScale file list is discovered
-        # at load time; setting it to [] avoids the local filesystem walk.
+        # Initialize path attributes compatible with SimpleDirectoryReader.
+        # input_dir and dataset_name modes leave input_files empty; the file list is
+        # resolved from MetadataIQ at load time.
+        self._dataset_name = dataset_name
         if norm_input_dir is not None:
             self.input_dir = Path(norm_input_dir)
             self.input_files: List[Path] = []
-        else:
+        elif norm_input_files is not None:
             self.input_dir = None
             self.input_files = [Path(p) for p in norm_input_files]
+        else:
+            self.input_dir = None
+            self.input_files = []
 
         self._force_scan = force_scan
         self._exclude_exact: Set[str] = {os.path.normpath(p) for p in (exclude or [])}
@@ -155,7 +151,19 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
     def __helper(self) -> PowerScaleHelper:
         """Lazily initialize and return the PowerScale helper."""
         if self.__pshelper is None:
-            if self._explicit_files:
+            if self._dataset_name is not None:
+                self.__pshelper = PowerScaleHelper(
+                    es_host_url=self._es_host_url,
+                    es_index_name=self._es_index_name,
+                    es_api_key=self._es_api_key,
+                    folder_path=None,
+                    input_files=None,
+                    dataset_name=self._dataset_name,
+                    verify_ssl=self._verify_ssl,
+                    app_name=self._app_name,
+                    app_version=self._app_version,
+                )
+            elif self._explicit_files is not None:
                 self.__pshelper = PowerScaleHelper(
                     es_host_url=self._es_host_url,
                     es_index_name=self._es_index_name,
@@ -173,6 +181,7 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
                     es_index_name=self._es_index_name,
                     es_api_key=self._es_api_key,
                     folder_path=self._input_dir,
+                    input_files=None,
                     dataset_name=None,
                     verify_ssl=self._verify_ssl,
                     app_name=self._app_name,
@@ -243,6 +252,10 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
             return False
 
         if not self.fs.isfile(p):
+            _logger.warning(
+                "Skipping %s: file returned by MetadataIQ does not exist on the configured filesystem",
+                p,
+            )
             return False
 
         # input_files mode: the ES query uses match_phrase on an analyzed text field,
@@ -274,7 +287,12 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
                 size = self.fs.info(p).get("size", 0)
                 if size == 0:
                     return False
-            except Exception:
+            except OSError as e:
+                _logger.warning(
+                    "Could not determine size of %s for exclude_empty filter: %s",
+                    p,
+                    e,
+                )
                 return False
 
         return True
@@ -287,7 +305,6 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
             exclude=None,
             recursive=False,
             required_exts=self.required_exts,
-            num_files_limit=None,
             file_extractor=self.file_extractor,
             file_metadata=meta_wrap,
             filename_as_id=self.filename_as_id,
@@ -299,16 +316,12 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         )
 
     def _collect_files(
-        self, apply_limit: bool = True
-    ) -> Tuple[Dict[str, Tuple[int, int, List[str]]], bool]:
+        self
+    ) -> Dict[str, Tuple[int, int, List[str]]]:
         """Use PowerScale to get the filtered file set for this run.
 
-        Returns a tuple of (selected, limit_reached). The checkpoint is not saved
-        here; callers must save the checkpoint after files are successfully parsed.
-
-        Args:
-            apply_limit: When False, ignore ``self.num_files_limit`` so callers
-                like ``list_resources()`` can return all matching files.
+        The checkpoint is not saved here; callers must save the checkpoint after
+        files are successfully parsed.
         """
         if self._force_scan:
             file_generator = self.__helper.get_directory_changes(snapshot_id=0, save_checkpoint=False)
@@ -316,25 +329,13 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
             file_generator = self.__helper.get_directory_changes(save_checkpoint=False)
 
         selected: Dict[str, Tuple[int, int, List[str]]] = {}
-        limit_reached = False
-        num_files_limit = self.num_files_limit if apply_limit else None
 
         for file_path, snapshot, lin, changes in file_generator:
             p = os.path.normpath(str(file_path))
             if self._filter(p):
-                # Intentionally break early WITHOUT fully consuming file_generator.
-                # get_directory_changes() only advances the checkpoint when its
-                # generator is exhausted; abandoning it mid-stream leaves the
-                # checkpoint unchanged.  On the next run the same files are
-                # returned again (together with any newly-changed files), which
-                # avoids silently dropping files that were never yielded to the
-                # caller.
-                if num_files_limit is not None and len(selected) >= num_files_limit:
-                    limit_reached = True
-                    break
                 selected[p] = (int(snapshot), int(lin), list(changes))
 
-        return selected, limit_reached
+        return selected
 
     def _reader_for(self, files: List[str], selected: Dict[str, Tuple[int, int, List[str]]]):
         """Build the inner SimpleDirectoryReader that loads the selected files."""
@@ -352,33 +353,36 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         Mirrors the signature of ``llama_index.core.SimpleDirectoryReader.load_data``
         so callers can pass ``show_progress``, ``num_workers``, and ``fs``.
         """
-        selected, limit_reached = self._collect_files()
-        if not selected:
-            _logger.debug("No files matched PowerScale selection or local filters.")
-            return []
+        original_fs = self.fs
+        if fs is not None:
+            self.fs = fs
+        try:
+            selected = self._collect_files()
+            if not selected:
+                _logger.debug("No files matched PowerScale selection or local filters.")
+                # Advance the checkpoint on an empty, fully-completed scan to avoid re-scanning.
+                self.__helper.save_checkpoint()
+                return []
 
-        ordered = sorted(selected.keys())
-        child = self._reader_for(ordered, selected)
-        # The file_metadata partial passed to the child is not picklable because it
-        # captures the PowerScaleSimpleDirectoryReader instance (which holds an
-        # Elasticsearch client). num_workers > 1 triggers multiprocessing.spawn and
-        # would crash. The public connector does not expose num_workers, so we keep
-        # the SimpleDirectoryReader-compatible signature but force sequential loading.
-        if isinstance(num_workers, int) and num_workers > 1:
-            _logger.warning(
-                "num_workers > 1 is not supported by PowerScaleSimpleDirectoryReader; "
-                "using sequential load."
+            ordered = sorted(selected.keys())
+            child = self._reader_for(ordered, selected)
+            # The metadata partial captures this instance (including the ES client), so it
+            # is not picklable.  Force sequential loading to avoid a multiprocessing failure.
+            if isinstance(num_workers, int) and num_workers > 1:
+                _logger.warning(
+                    "num_workers > 1 is not supported by PowerScaleSimpleDirectoryReader; "
+                    "using sequential load."
+                )
+                num_workers = None
+            # fs is already passed to the child constructor via self.fs in _child_reader().
+            documents = child.load_data(
+                show_progress=show_progress, num_workers=num_workers
             )
-            num_workers = None
-        documents = child.load_data(
-            show_progress=show_progress, num_workers=num_workers, fs=fs
-        )
-        # Only advance the checkpoint once all selected files have been successfully
-        # parsed. If parsing raises, the checkpoint stays where it was so the run
-        # can be retried.
-        if not limit_reached:
+            # Advance the checkpoint only after all selected files are parsed successfully.
             self.__helper.save_checkpoint()
-        return documents
+            return documents
+        finally:
+            self.fs = original_fs
 
     def iter_data(
         self, show_progress: bool = False
@@ -386,12 +390,13 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         """Load data iteratively from the PowerScale selection.
 
         Yields one list of :class:`Document` objects per selected file. The
-        checkpoint is advanced only when the generator is fully consumed and
-        ``num_files_limit`` was not reached.
+        checkpoint is advanced only when the generator is fully consumed.
         """
-        selected, limit_reached = self._collect_files()
+        selected = self._collect_files()
         if not selected:
             _logger.debug("No files matched PowerScale selection or local filters.")
+            # Advance the checkpoint on an empty, fully-completed scan to avoid re-scanning.
+            self.__helper.save_checkpoint()
             return
 
         ordered = sorted(selected.keys())
@@ -404,7 +409,7 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         finally:
             # Only advance the checkpoint if every selected file was successfully
             # yielded and the caller did not break early.
-            if fully_consumed and not limit_reached:
+            if fully_consumed:
                 self.__helper.save_checkpoint()
 
     def lazy_load_data(
@@ -435,7 +440,7 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         """List the file paths currently selected by PowerScale.
 
         **Important**: This method performs a PowerScale MetadataIQ scan via
-        Elasticsearch and returns all matching files, ignoring ``num_files_limit``.
+        Elasticsearch and returns all matching files.
         Unlike the base ``SimpleDirectoryReader.list_resources()`` which returns
         the static ``input_files`` list, this method reflects the current PowerScale
         selection and may be I/O-intensive for large datasets.
@@ -443,7 +448,7 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         Returns:
             List of absolute file paths matching the PowerScale scope.
         """
-        selected, _ = self._collect_files(apply_limit=False)
+        selected = self._collect_files()
         return sorted(selected.keys())
 
     def _merge_metadata(
@@ -465,7 +470,7 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
             try:
                 user_meta = self._orig_cb(path_str) or {}
             except Exception as e:
-                _logger.debug("file_metadata failed for %s: %s", path_str, e)
+                _logger.warning("file_metadata failed for %s: %s", path_str, e)
 
         snapshot, lin, changes = selected[os.path.normpath(path_str)]
         # Start with user-provided keys, then overwrite with PowerScale fields so

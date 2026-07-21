@@ -28,7 +28,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Iterator
 
 from dotenv import load_dotenv
 from nv_ingest_client.client import Ingestor
@@ -77,11 +76,6 @@ def run_ingestor(file_path: Path):
     """
     logger.debug("Ingesting file: %s", file_path)
 
-    # Ensure the file exists
-    if not file_path.exists():
-        logger.error("File does not exist: %s", file_path)
-        return False
-
     # Use v2 API pattern
     ingestor = Ingestor(
         message_client_allocator=RestClient,
@@ -106,46 +100,22 @@ def run_ingestor(file_path: Path):
         return False
 
 
-def get_powerscale_files() -> Iterator[Path]:
-    """
-    Get files from PowerScale using PowerScalePathLoader.
-
-    Returns:
-        Iterator of Path objects
-    """
-    logger.debug("Getting files from PowerScale: path=%s", FOLDER_PATH)
-
-    loader = PowerScalePathLoader(
-        es_host_url=ES_HOST_URL,
-        es_index_name=ES_INDEX_NAME,
-        es_api_key=ES_API_KEY,
-        folder_path=FOLDER_PATH,
-        force_scan=FORCE_SCAN,
-        verify_ssl=VERIFY_SSL,
-        app_name="powerscale_nvingest",
-        app_version=1,
-    )
-
-    # The loader returns tuples of (Path, snapshot_id, lin, change_types)
-    for file_tuple in loader.lazy_load():
-        filepath, snapshot, lin, change_types = file_tuple
-        logger.debug(
-            "File found: %s (snapshot: %d, changes: %s)",
-            filepath,
-            snapshot,
-            change_types,
-        )
-        yield filepath
-
-
 def main():
     try:
         # Set debug logging if requested
         if DEBUG_MODE:
             logging.getLogger("powerscale_rag_connector").setLevel(logging.DEBUG)
 
-        # Get files from PowerScale
-        files_iterator = get_powerscale_files()
+        loader = PowerScalePathLoader(
+            es_host_url=ES_HOST_URL,
+            es_index_name=ES_INDEX_NAME,
+            es_api_key=ES_API_KEY,
+            folder_path=FOLDER_PATH,
+            force_scan=FORCE_SCAN,
+            verify_ssl=VERIFY_SSL,
+            app_name="powerscale_nvingest",
+            app_version=1,
+        )
 
         # Process statistics
         start_time = time.time()
@@ -154,14 +124,24 @@ def main():
         error_count = 0
 
         # Process each file
-        for file_path in files_iterator:
+        # IMPORTANT: Errors during processing will abort the loop and prevent checkpoint
+        # advancement. The loader will retry failed files on the next run. If you want to
+        # skip errors and advance the checkpoint anyway, wrap this loop in try/except and
+        # consume the entire generator even when errors occur.
+        for file_tuple in loader.lazy_load():
+            filepath, _snapshot, _lin, _change_types = file_tuple
             file_count += 1
-            logger.info("Processing file %d: %s", file_count, file_path)
+            logger.info("Processing file %d: %s", file_count, filepath)
 
-            if run_ingestor(file_path):
+            if run_ingestor(filepath):
                 success_count += 1
             else:
                 error_count += 1
+                logger.error("Ingestion failed for %s - aborting to prevent checkpoint advancement", filepath)
+                raise RuntimeError(f"NvIngest failed for {filepath}")
+
+        # Only advance the checkpoint after all files were ingested successfully.
+        loader.save_checkpoint()
 
         # Calculate and log statistics
         elapsed_time = time.time() - start_time

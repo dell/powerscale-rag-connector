@@ -80,14 +80,15 @@ class PowerScaleHelper:
         self.__verify_ssl = verify_ssl
         self.__latest_snapshot_id = -1
         self.__max_mtime = 0
+        self.__files_seen: Optional[bool] = None
         self.__app_name = app_name
         self.__app_version = app_version
 
         # checkpoint document names (written to user's elastic index)
         self.__document_name = self.__app_name
-        self.__dataset_index = "powerscale_rag_datasets"  # MetadataIQ elastic index for storing dataset definitions
+        self.__dataset_index = "powerscale_rag_datasets"
 
-        # Throw a ValueError if no valid scope was provided
+        # Require exactly one scope at construction time
         if (self.__dataset_name is None) and (self.__folder_path is None) and (self.__input_files is None):
             raise ValueError(
                 "select one of dataset_name, folder_path, or input_files as iteration scope"
@@ -97,8 +98,7 @@ class PowerScaleHelper:
         if self.__dataset_name is not None and (self.__folder_path is not None or self.__input_files is not None):
             raise ValueError("dataset_name is mutually exclusive with folder_path and input_files; select one only")
 
-        # Validate folder_path begins with "/ifs". The query uses phrase_prefix on the
-        # tokenized path field, so anchoring the path to the OneFS root keeps matches unambiguous.
+        # folder_path must be an absolute PowerScale path beginning with /ifs.
         if self.__folder_path is not None and not self.__folder_path.startswith("/ifs"):
             raise ValueError("folder_path must start with '/ifs'")
 
@@ -119,11 +119,11 @@ class PowerScaleHelper:
             ssl_show_warn=not self.__verify_ssl,
         )
 
-        # read dataset definition if we have a dataset name
+        # Load the MetadataIQ dataset definition when configured.
         if self.__dataset_name is not None:
             self.__dataset_doc = self.refresh_dataset()
 
-        # set root key for checkpoint document, folder_path or dataset based on current config
+        # Configure checkpoint root key from the active scope
         if self.__dataset_name is not None:
             self.__checkpoint_root = "datasets"
             self.__checkpoint_key = "dataset"
@@ -139,10 +139,10 @@ class PowerScaleHelper:
         else:
             raise ValueError("Could not determine checkpoint root configuration")
 
-        # initialize current checkpoint document
+        # Load or initialize the checkpoint document.
         ckpt_success, self.__last_state = self.get_checkpoint()
 
-        _masked_key = ("***" + self.__es_api_key[-4:]) if self.__es_api_key else "***"
+        _masked_key = "***"
         _logger.debug(
             "Hostname=%s Index=%s es_api_key=%s folder_path=%s dataset_name=%s last_state=%s",
             self.__es_host_url,
@@ -183,28 +183,21 @@ class PowerScaleHelper:
 
     def update_latest_snapid(self) -> None:
         """Update the latest snapshot ID from the index"""
-        try:
-            result = self.__es.search(
-                index=self.__es_index_name,
-                aggs={"max_snapid": {"max": {"field": "metadata.snapshots.s2"}}},
-                size=0,
-            )
-            raw = result["aggregations"]["max_snapid"]["value"]
-            if raw is None:
-                _logger.warning("update_latest_snapid: index exists but has no documents; defaulting to -1")
-                self.__latest_snapshot_id = -1
-            else:
-                self.__latest_snapshot_id = int(raw)
-            _logger.debug(
-                "MetadataIQ latest snapshot id for %s = %d",
-                self.__es_index_name, self.__latest_snapshot_id
-            )
-        except Exception as e:
-            _logger.error(
-                "Error in PowerScale RAG Connector Helper update_latest_snapid; defaulting to -1: %s",
-                e
-            )
+        result = self.__es.search(
+            index=self.__es_index_name,
+            aggs={"max_snapid": {"max": {"field": "metadata.snapshots.s2"}}},
+            size=0,
+        )
+        raw = result["aggregations"]["max_snapid"]["value"]
+        if raw is None:
+            _logger.warning("update_latest_snapid: index exists but has no documents; defaulting to -1")
             self.__latest_snapshot_id = -1
+        else:
+            self.__latest_snapshot_id = int(raw)
+        _logger.debug(
+            "MetadataIQ latest snapshot id for %s = %d",
+            self.__es_index_name, self.__latest_snapshot_id
+        )
 
     def get_snapshot_id(self) -> int:
         """Look up last processed snapshot id for current path and version"""
@@ -283,16 +276,11 @@ class PowerScaleHelper:
                 if key not in self.__last_state:
                     self.__last_state[key] = defaults[key]
 
-        doc = {
-            self.__checkpoint_key: self.__checkpoint_value,
-            "version": self.__app_version,
-            "snapshot": self.__latest_snapshot_id,
-            "saved_mtime": self.__max_mtime,
-        }
         state = self.__last_state
         state_key_found = False
         state_snapshot_id = -1  # use -1 so a brand-new entry always triggers a write
-        # Check if state has our old run, if we do, update it
+        old_saved_mtime = None
+        # Locate the existing checkpoint entry for this scope and version.
         for index, keydoc in enumerate(state[self.__checkpoint_root]):
             # Match both path and version
             if (
@@ -300,12 +288,31 @@ class PowerScaleHelper:
                 and keydoc.get("version") == self.__app_version
             ):
                 state_snapshot_id = keydoc.get("snapshot", -1)
-                state[self.__checkpoint_root][index] = doc
+                old_saved_mtime = keydoc.get("saved_mtime")
                 state_key_found = True
                 break
 
-        # Brand new run, need to add it to our state
-        if not state_key_found:
+        # Preserve saved_mtime on empty runs to avoid misclassifying modified files as added.
+        if self.__files_seen is not False:
+            saved_mtime = self.__max_mtime
+        elif state_key_found and old_saved_mtime is not None:
+            saved_mtime = old_saved_mtime
+        else:
+            # get_directory_changes ran but saw no files and there is no prior saved_mtime
+            saved_mtime = None
+
+        doc = {
+            self.__checkpoint_key: self.__checkpoint_value,
+            "version": self.__app_version,
+            "snapshot": self.__latest_snapshot_id,
+        }
+        if saved_mtime is not None:
+            doc["saved_mtime"] = saved_mtime
+
+        if state_key_found:
+            state[self.__checkpoint_root][index] = doc
+        else:
+            # Append a new checkpoint entry for this scope.
             state[self.__checkpoint_root].append(doc)
 
         if state_snapshot_id >= self.__latest_snapshot_id:
@@ -387,7 +394,7 @@ class PowerScaleHelper:
                             }
                         },
                         {
-                            "match_phrase_prefix": {
+                            "match_phrase": {
                                 "data.path": "/ifs/<path>/"
                             }
                         }
@@ -401,7 +408,7 @@ class PowerScaleHelper:
             # a sibling path like /ifs/databank when the field is a single token.
             path = self.__folder_path.rstrip().rstrip("/") + "/"
             base_query = {
-                "bool": {"must": [{"match_phrase_prefix": {"data.path": path}}]}
+                "bool": {"must": [{"match_phrase": {"data.path": path}}]}
             }
         elif self.__dataset_name is not None:
             # use dataset definition query; tolerate both string-JSON and dict storage
@@ -411,9 +418,21 @@ class PowerScaleHelper:
             else:
                 parsed = raw_query
             if isinstance(parsed, dict) and "query" in parsed:
-                base_query = parsed["query"]
+                # Full search request body was stored; use the inner query clause.
+                user_query = parsed["query"]
             else:
-                base_query = parsed
+                user_query = parsed
+
+            # Reuse an existing bool query; otherwise wrap the user query in bool.must
+            # before appending the connector's filters.
+            if isinstance(user_query, dict) and "bool" in user_query:
+                base_query = copy.deepcopy(user_query)
+                # bool.must may be a single dict in valid ES DSL; normalize to a list.
+                if "must" in base_query["bool"] and not isinstance(base_query["bool"]["must"], list):
+                    base_query["bool"]["must"] = [base_query["bool"]["must"]]
+            else:
+                clauses = user_query if isinstance(user_query, list) else [user_query]
+                base_query = {"bool": {"must": clauses}}
             _logger.debug("Dataset query from definition: %s", base_query)
         elif self.__input_files is not None:
             # use should+match_phrase for exact path matches on text field
@@ -428,18 +447,17 @@ class PowerScaleHelper:
         else:
             raise ValueError("build_query: no scope configured (folder_path, dataset_name, or input_files required)")
 
-        # restrict results to 'normal' files, no dirs, links, etc.
+        # Restrict results to regular files (exclude directories and symlinks).
         base_conditions = [{"term": {"data.file_type": "regular"}}]
 
-        # if we are filtering by snapshot_id, extend the query filters with the
-        # range filter
+        # Add the snapshot range filter when not scanning every file.
         if not all_files:
             base_conditions.append({"range": {"metadata.snapshots.s2": {"gt": snapshot_id}}})
             base_conditions.append(
                 {"range": {"metadata.snapshots.s2": {"lte": self.__latest_snapshot_id}}}
             )
 
-        # add the extra conditions to the base query as a "must" clause
+        # Append the connector-level conditions to the base bool query.
         retval = copy.deepcopy(base_query)
         for condition in base_conditions:
             retval.setdefault("bool", {}).setdefault("must", []).append(condition)
@@ -458,10 +476,8 @@ class PowerScaleHelper:
         if snapshot_id < 0:
             snapshot_id = self.get_snapshot_id()
 
-        # set the upper bound on the query to the highest current snapshot
-        # therefore if another snapshot comes along while we are processing
-        # we will not return those files until the next run, avoiding
-        # skipping or duplicating results
+        # Upper-bound the scan at the latest known snapshot so files added during
+        # processing are deferred to the next run.
         self.update_latest_snapid()
 
         # Main repo style: always use the snapshot range, even for snapshot_id=0.
@@ -493,29 +509,27 @@ class PowerScaleHelper:
         """
         search_success = False
         try:
-            # Main repo style: first run only when the caller explicitly uses the
-            # default negative snapshot_id AND no checkpoint exists yet.
+            # First run occurs only with the default snapshot_id and no prior checkpoint.
             is_first_run = snapshot_id < 0 and self.get_snapshot_id() < 0
             raw_saved_mtime = self._get_saved_mtime_optional()
             saved_mtime = raw_saved_mtime if raw_saved_mtime is not None else 0
             self.__max_mtime = saved_mtime  # preserve previous value if scan returns no results
+            self.__files_seen = False
             for document in self.match_files_by_snapshot(snapshot_id):
                 _logger.debug("ES returned the following document: %s", document)
                 file_path = document["_source"]["data"]["path"]
                 snapshot = int(document["_source"]["metadata"]["snapshots"]["s2"])
                 lin = int(document["_source"]["data"]["lin"])
-                change_types = document["_source"]["data"].get("change_types", [])
+                change_types = document["_source"]["data"].get("change_types") or []
                 if "ENTRY_MODIFIED" in change_types and is_first_run:
                     change_types = ["ENTRY_ADDED"]
                 # Use ``or 0`` so a JSON null/None in the ES document is treated as 0.
                 btime = int(document["_source"]["data"].get("btime") or 0)
                 mtime = int(document["_source"]["data"].get("mtime") or 0)
-                # If the file's birth time (creation) is newer than the last-run mtime
-                # checkpoint, the file must have been created after the previous run and
-                # MetadataIQ tagged it ENTRY_MODIFIED because it was also written before we
-                # scanned. Reclassify as ENTRY_ADDED so callers treat it as a new file.
-                # A missing saved_mtime (None) indicates an old v1 checkpoint; do not
-                # reclassify in that case to avoid treating every modification as an add.
+                # A file created after the previous run but modified before this scan may be
+                # reported as ENTRY_MODIFIED. Reclassify it as ENTRY_ADDED so callers treat
+                # it as a newly discovered file.  Do not reclassify when there is no prior
+                # saved_mtime (old v1 checkpoints), to avoid misclassifying every modification.
                 if (
                     "ENTRY_MODIFIED" in change_types
                     and raw_saved_mtime is not None
@@ -523,6 +537,7 @@ class PowerScaleHelper:
                 ):
                     change_types = ["ENTRY_ADDED"]
                 self.__max_mtime = max(self.__max_mtime, mtime)
+                self.__files_seen = True
                 yield Path(file_path), snapshot, lin, change_types
             search_success = True  # only reached if loop ran to completion
         except Exception as e:
@@ -532,6 +547,7 @@ class PowerScaleHelper:
                 e,
                 exc_info=True,
             )
+            raise  # Re-raise to prevent partial scans from appearing complete
         finally:
             if search_success and save_checkpoint:
                 self.save_checkpoint()

@@ -1,4 +1,14 @@
+"""PowerScale LangChain DocumentLoader.
+
+Identifies files that changed since the last checkpoint and yields one
+``Document`` per file with an empty ``page_content`` and PowerScale metadata
+(``source``, ``snapshot``, ``lin``, ``change_types``).  Files missing from the
+local filesystem are skipped with a warning.  Use ``PowerScaleUnstructuredLoader``
+to extract file contents.
+"""
+
 import logging
+import os
 from typing import Iterator, Optional
 
 from langchain_core.document_loaders import BaseLoader
@@ -10,16 +20,10 @@ _logger = logging.getLogger(__name__)
 
 
 class PowerScaleDocumentLoader(BaseLoader):
-    """LangChain Document Loader that uses Dell PowerScale's MetadataIQ feature to "checkpoint" the loader and only
-    read files that have changed between its last run.
+    """PowerScale LangChain DocumentLoader.
 
-    This is a metadata-only loader: the returned Documents have an empty ``page_content``
-    string and only populate ``metadata`` with ``source``, ``snapshot``, ``lin``, and
-    ``change_types``. Use PowerScaleUnstructuredLoader or a custom reader to load file
-    contents.
-
-    Applications requiring more flexibility (without strict LangChain DocumentLoader API compatibility)
-    may prefer to use the PowerScalePathLoader.
+    Loads file metadata via LangChain's ``BaseLoader`` interface, leveraging
+    PowerScale MetadataIQ to efficiently find files that have changed.
     """
 
     def __init__(
@@ -74,13 +78,23 @@ class PowerScaleDocumentLoader(BaseLoader):
         return self.__pshelper
 
     def lazy_load(self) -> Iterator[Document]:
-        """Lazy load new files on current path using MetadataIQ metadata"""
+        """Lazy load new files on current path using MetadataIQ metadata.
+
+        Checkpoint advancement is deferred; call :meth:`save_checkpoint` after
+        downstream ingestion succeeds.
+        """
         if self.__force_scan:
-            file_generator = self.__helper.get_directory_changes(snapshot_id=0)
+            file_generator = self.__helper.get_directory_changes(snapshot_id=0, save_checkpoint=False)
         else:
-            file_generator = self.__helper.get_directory_changes()
+            file_generator = self.__helper.get_directory_changes(save_checkpoint=False)
 
         for file, snapshot, lin, change_types in file_generator:
+            if not os.path.isfile(str(file)):
+                _logger.warning(
+                    "Skipping %s: file returned by MetadataIQ does not exist on the local filesystem",
+                    file,
+                )
+                continue
             metadata = {
                 "source": str(file),
                 "snapshot": snapshot,
@@ -94,3 +108,7 @@ class PowerScaleDocumentLoader(BaseLoader):
                 metadata["change_types"],
             )
             yield Document(page_content="", metadata=metadata)
+
+    def save_checkpoint(self) -> None:
+        """Persist the checkpoint after downstream ingestion has succeeded."""
+        self.__helper.save_checkpoint()

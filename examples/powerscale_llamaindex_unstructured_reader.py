@@ -83,12 +83,10 @@ def get_parsed_documents() -> List[Document]:
         source = doc.metadata.get("source", "Unknown")
         snapshot = doc.metadata.get("snapshot", -1)
         change_types = doc.metadata.get("change_types", [])
-        element_type = doc.metadata.get("category", "Unknown")
 
         logger.debug(
-            "Document element: %s (type: %s, snapshot: %d, changes: %s)",
+            "Document element: %s (snapshot: %d, changes: %s)",
             source,
-            element_type,
             snapshot,
             change_types,
         )
@@ -102,16 +100,12 @@ def analyze_document_elements(documents: List[Document]) -> Dict[str, Any]:
     """
     results = {
         "total_elements": len(documents),
-        "elements_by_type": defaultdict(int),
         "elements_by_source": defaultdict(int),
         "avg_element_length": 0,
         "total_content_length": 0,
     }
 
     for doc in documents:
-        element_type = doc.metadata.get("category", "Unknown")
-        results["elements_by_type"][element_type] += 1
-
         source = doc.metadata.get("source", "Unknown")
         results["elements_by_source"][source] += 1
 
@@ -144,10 +138,6 @@ def main():
         logger.info("Document analysis:")
         logger.info("  Total elements: %d", analysis["total_elements"])
         logger.info("  Avg element length: %.2f chars", analysis["avg_element_length"])
-
-        logger.info("  Elements by type:")
-        for etype, count in analysis["elements_by_type"].items():
-            logger.info("    - %s: %d", etype, count)
 
         logger.info("  Elements by source file:")
         for source, count in analysis["elements_by_source"].items():

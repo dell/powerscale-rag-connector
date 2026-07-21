@@ -11,10 +11,8 @@ import logging
 import os
 import sys
 import time
-from typing import Iterator
 
 from dotenv import load_dotenv
-from langchain_core.documents import Document
 
 from powerscale_rag_connector import PowerScaleDocumentLoader
 
@@ -49,31 +47,6 @@ VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
 
-def get_powerscale_documents() -> Iterator[Document]:
-    """
-    Get Document objects from PowerScale using PowerScaleDocumentLoader.
-
-    Returns:
-        Iterator of LangChain Document objects
-    """
-    logger.info("Getting documents from PowerScale: path=%s", FOLDER_PATH)
-
-    loader = PowerScaleDocumentLoader(
-        es_host_url=ES_HOST_URL,
-        es_index_name=ES_INDEX_NAME,
-        es_api_key=ES_API_KEY,
-        folder_path=FOLDER_PATH,
-        force_scan=FORCE_SCAN,
-        verify_ssl=VERIFY_SSL,
-        app_name="powerscale_langchain_doc_loader",
-        app_version=1,
-    )
-
-    # Return the Document objects from the loader
-    for document in loader.lazy_load():
-        yield document
-
-
 def main():
     try:
         # Set debug logging if requested
@@ -84,8 +57,19 @@ def main():
         start_time = time.time()
         doc_count = 0
 
+        loader = PowerScaleDocumentLoader(
+            es_host_url=ES_HOST_URL,
+            es_index_name=ES_INDEX_NAME,
+            es_api_key=ES_API_KEY,
+            folder_path=FOLDER_PATH,
+            force_scan=FORCE_SCAN,
+            verify_ssl=VERIFY_SSL,
+            app_name="powerscale_langchain_doc_loader",
+            app_version=1,
+        )
+
         # Process each document
-        for document in get_powerscale_documents():
+        for document in loader.lazy_load():
             doc_count += 1
             logger.info(
                 "Processing document %d: %s (snapshot: %d, changes: %s)",
@@ -96,6 +80,9 @@ def main():
             )
             # In a real application, you would do something with the document here
             # For example, process the document content or add it to a vector store
+
+        # Only advance the checkpoint if all documents were processed successfully.
+        loader.save_checkpoint()
 
         # Calculate and log statistics
         elapsed_time = time.time() - start_time

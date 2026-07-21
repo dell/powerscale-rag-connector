@@ -33,19 +33,46 @@ Repository = "https://github.com/dell/powerscale-rag-connector.git"
 langchain = [
   "langchain-core",
   "langchain-unstructured",
+  "langchain-elasticsearch",
+  "langchain-nvidia-ai-endpoints",
 ]
 llamaindex = [
   "llama-index",
   "llama-index-readers-file",
-  "unstructured",
+  "llama-index-embeddings-nvidia",
+  "llama-index-vector-stores-elasticsearch",
+  "unstructured[pdf]",
+  "fsspec",
 ]
-# aggregate
-all = [
+nvingest = [
+  "nv-ingest-client",
+]
+examples = [
+  "python-dotenv",
   "langchain-core",
+  "langchain-elasticsearch",
+  "langchain-nvidia-ai-endpoints",
   "langchain-unstructured",
   "llama-index",
   "llama-index-readers-file",
-  "unstructured",
+  "llama-index-embeddings-nvidia",
+  "llama-index-vector-stores-elasticsearch",
+  "unstructured[pdf]",
+  "nv-ingest-client",
+]
+# aggregate
+all = [
+  "python-dotenv",
+  "langchain-core",
+  "langchain-elasticsearch",
+  "langchain-nvidia-ai-endpoints",
+  "langchain-unstructured",
+  "llama-index",
+  "llama-index-readers-file",
+  "llama-index-embeddings-nvidia",
+  "llama-index-vector-stores-elasticsearch",
+  "unstructured[pdf]",
+  "nv-ingest-client",
 ]
 test = [
   "pytest>=7",

@@ -1,8 +1,15 @@
-"""Module providing a langchain-style PowerScale MetadataIQ Loader that returns Path objects"""
+"""PowerScale PathLoader.
+
+Yields ``(Path, snapshot, lin, change_types)`` tuples for files that changed
+since the last checkpoint.  It does not read file contents; pass the returned
+paths to ``PowerScaleUnstructuredLoader`` (LangChain) or
+``PowerScaleUnstructuredReader`` (LlamaIndex) to extract text.  Files missing
+from the local filesystem are skipped with a warning.
+"""
 
 import logging
+import os
 from pathlib import Path
-
 from typing import Iterator, List, Optional, Tuple
 
 from .PowerScaleHelper import PowerScaleHelper
@@ -11,8 +18,10 @@ _logger = logging.getLogger(__name__)
 
 
 class PowerScalePathLoader:
-    """LangChain-style Loader that uses Dell's PowerScale MetadataIQ feature to quickly
-    identify files that have changed since the last run.
+    """PowerScale PathLoader.
+
+    Yields changed file paths as ``(Path, snapshot, lin, change_types)`` tuples,
+    leveraging PowerScale MetadataIQ to efficiently find files that have changed.
     """
 
     def __init__(
@@ -71,6 +80,9 @@ class PowerScalePathLoader:
         Lazy load only new files on current path using MetadataIQ metadata.
         Yields files one at a time via search_after pagination.
 
+        Checkpoint advancement is deferred; call :meth:`save_checkpoint` after
+        downstream ingestion succeeds.
+
         Returns:
             Iterator yielding tuples containing:
             - Path: pathlib.Path object of the file
@@ -80,18 +92,34 @@ class PowerScalePathLoader:
         """
         if self.__force_scan:
             # When force scanning, use get_directory_changes with snapshot_id=0
-            file_generator = self.__helper.get_directory_changes(snapshot_id=0)
+            file_generator = self.__helper.get_directory_changes(snapshot_id=0, save_checkpoint=False)
         else:
             # For normal operation, use get_directory_changes with default snapshot_id
-            file_generator = self.__helper.get_directory_changes()
+            file_generator = self.__helper.get_directory_changes(save_checkpoint=False)
 
-        for index, file_tuple in enumerate(file_generator):
+        total = 0
+        yielded = 0
+        for index, file_tuple in enumerate(file_generator, start=1):
+            total = index
             filepath, snapshot, lin, change_types = file_tuple
+            if not os.path.isfile(str(filepath)):
+                _logger.warning(
+                    "Skipping %s: file returned by MetadataIQ does not exist on the local filesystem",
+                    filepath,
+                )
+                continue
+            yielded += 1
             _logger.debug(
-                "File returned %d: %s (snapshot: %d) changes: %s",
-                index,
+                "File %d: %s (snapshot: %d) changes: %s",
+                yielded,
                 filepath,
                 snapshot,
                 change_types,
             )
             yield file_tuple
+        else:
+            _logger.info("Total files found by MetadataIQ: %d", total)
+
+    def save_checkpoint(self) -> None:
+        """Persist the checkpoint after downstream ingestion has succeeded."""
+        self.__helper.save_checkpoint()

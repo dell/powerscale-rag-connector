@@ -72,7 +72,7 @@ VECTORSTORE_INDEX = os.getenv("VECTORSTORE_INDEX", "rag_vectors")
 VECTORSTORE_ES_URL = os.getenv("VECTORSTORE_ES_URL", "http://localhost:9200").rstrip("/")
 ES_API_KEY = _require_env("ES_API_KEY")
 FOLDER_PATH = os.path.normpath(_require_env("FOLDER_PATH"))
-VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() == "true"
+VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 
 NV_INGEST_ENDPOINT = _require_env("NV_INGEST_ENDPOINT")
 NV_INGEST_PORT = int(_require_env("NV_INGEST_PORT"))
@@ -104,10 +104,6 @@ def get_vectorstore() -> ElasticsearchStore:
 
 def run_nvingest(file_path: Path) -> List[Dict[str, Any]]:
     """Process a file through NvIngest v2 and return extracted text chunks."""
-    if not file_path.exists():
-        logger.error("File does not exist: %s", file_path)
-        return []
-
     ingestor = Ingestor(
         message_client_allocator=RestClient,
         message_client_hostname=NV_INGEST_ENDPOINT,
@@ -200,6 +196,10 @@ def process_changed_files() -> None:
 
     file_count = success_count = error_count = 0
 
+    # IMPORTANT: Errors during processing will abort the loop and prevent checkpoint
+    # advancement. The checkpoint is only committed after all files are processed
+    # successfully by calling loader.save_checkpoint(). If you want to skip errors and
+    # advance the checkpoint anyway, consume the entire generator and call save_checkpoint().
     for document in loader.lazy_load():
         file_count += 1
         filepath = Path(document.metadata.get("source", ""))
@@ -210,9 +210,9 @@ def process_changed_files() -> None:
 
         chunks = run_nvingest(filepath)
         if not chunks:
-            logger.warning("No chunks produced for %s, skipping", filepath)
+            logger.error("No chunks produced for %s - aborting to prevent checkpoint advancement", filepath)
             error_count += 1
-            continue
+            raise RuntimeError(f"NvIngest failed for {filepath}")
 
         if "ENTRY_MODIFIED" in change_types:
             deleted = delete_by_lin(vectorstore, lin)
@@ -222,8 +222,12 @@ def process_changed_files() -> None:
         if added > 0:
             success_count += 1
         else:
+            logger.error("Failed to add chunks for %s - aborting to prevent checkpoint advancement", filepath)
             error_count += 1
+            raise RuntimeError(f"Vector store add failed for {filepath}")
 
+    # Only advance the checkpoint after all files have been ingested successfully.
+    loader.save_checkpoint()
     logger.info("Processing complete: %d files, %d successful, %d errors", file_count, success_count, error_count)
 
 

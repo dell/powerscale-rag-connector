@@ -10,8 +10,6 @@ import logging
 import os
 import sys
 import time
-from pathlib import Path
-from typing import Iterator, List, Tuple
 
 from dotenv import load_dotenv
 
@@ -48,38 +46,6 @@ VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
 
-def get_powerscale_files() -> Iterator[Tuple[Path, int, int, List[str]]]:
-    """
-    Get file metadata from PowerScale's MetadataIQ facility using PowerScalePathLoader.
-
-    Returns:
-        Iterator of tuples containing (Path, snapshot_id, lin, change_types)
-    """
-    logger.info("Getting files from PowerScale: path=%s", FOLDER_PATH)
-
-    loader = PowerScalePathLoader(
-        es_host_url=ES_HOST_URL,
-        es_index_name=ES_INDEX_NAME,
-        es_api_key=ES_API_KEY,
-        folder_path=FOLDER_PATH,
-        force_scan=FORCE_SCAN,
-        verify_ssl=VERIFY_SSL,
-        app_name="powerscale_pathloader_example",
-        app_version=1,
-    )
-
-    # Return the full tuple from lazy_load
-    for file_tuple in loader.lazy_load():
-        filepath, snapshot, lin, change_types = file_tuple
-        logger.info(
-            "File found: %s (snapshot: %d, changes: %s)",
-            filepath,
-            snapshot,
-            change_types,
-        )
-        yield file_tuple
-
-
 def main():
     try:
         # Set debug logging if requested
@@ -90,8 +56,19 @@ def main():
         start_time = time.time()
         file_count = 0
 
+        loader = PowerScalePathLoader(
+            es_host_url=ES_HOST_URL,
+            es_index_name=ES_INDEX_NAME,
+            es_api_key=ES_API_KEY,
+            folder_path=FOLDER_PATH,
+            force_scan=FORCE_SCAN,
+            verify_ssl=VERIFY_SSL,
+            app_name="powerscale_pathloader_example",
+            app_version=1,
+        )
+
         # Process each file
-        for file_path, snapshot_id, lin, change_types in get_powerscale_files():
+        for file_path, snapshot_id, lin, change_types in loader.lazy_load():
             file_count += 1
             logger.info(
                 "Processing file %d: %s (snapshot: %d, changes: %s)",
@@ -101,6 +78,9 @@ def main():
                 change_types,
             )
             # In a real application, you would do something with the file here
+
+        # Only advance the checkpoint after all files were processed successfully.
+        loader.save_checkpoint()
 
         # Calculate and log statistics
         elapsed_time = time.time() - start_time

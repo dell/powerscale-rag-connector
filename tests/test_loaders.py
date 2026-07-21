@@ -1,0 +1,157 @@
+"""Tests for PowerScalePathLoader and PowerScaleDocumentLoader.
+
+Both loaders defer to a lazily-created PowerScaleHelper. Tests inject a
+FakeHelper via the name-mangled ``__pshelper`` slot to avoid touching
+Elasticsearch.
+"""
+
+import logging
+from pathlib import Path
+
+import pytest
+
+from tests.conftest import FakeHelper
+
+from powerscale_rag_connector import PowerScalePathLoader
+
+
+@pytest.fixture(autouse=True)
+def _patch_isfile_for_loader_tests(monkeypatch):
+    """Treat test paths as existing files so existence checks do not short-circuit."""
+    monkeypatch.setattr("os.path.isfile", lambda p: True)
+
+
+TUPLES = [
+    (Path("/ifs/data/a.txt"), 10, 1, ["ENTRY_ADDED"]),
+    (Path("/ifs/data/b.txt"), 11, 2, ["ENTRY_MODIFIED"]),
+]
+
+
+def _make_path_loader(fake_helper, **kwargs):
+    loader = PowerScalePathLoader(
+        es_host_url="http://localhost:9200",
+        es_index_name="idx",
+        es_api_key="key",
+        folder_path="/ifs/data",
+        **kwargs,
+    )
+    loader._PowerScalePathLoader__pshelper = fake_helper
+    return loader
+
+
+# --- PowerScalePathLoader ------------------------------------------------
+
+def test_path_loader_yields_tuples_unchanged():
+    fake = FakeHelper(TUPLES)
+    loader = _make_path_loader(fake)
+    assert list(loader.lazy_load()) == TUPLES
+
+
+def test_path_loader_normal_uses_default_snapshot():
+    fake = FakeHelper(TUPLES)
+    loader = _make_path_loader(fake, force_scan=False)
+    list(loader.lazy_load())
+    assert fake.calls == [-1]
+
+
+def test_path_loader_force_scan_uses_zero():
+    fake = FakeHelper(TUPLES)
+    loader = _make_path_loader(fake, force_scan=True)
+    list(loader.lazy_load())
+    assert fake.calls == [0]
+
+
+def test_path_loader_skips_missing_files_with_warning(monkeypatch, caplog):
+    """PowerScalePathLoader should skip MetadataIQ entries whose files do not exist locally."""
+    fake = FakeHelper(TUPLES)
+    loader = _make_path_loader(fake)
+    monkeypatch.setattr("os.path.isfile", lambda p: False)
+    with caplog.at_level(logging.WARNING, logger="powerscale_rag_connector.PowerScalePathLoader"):
+        results = list(loader.lazy_load())
+    assert results == []
+    assert any("does not exist on the local filesystem" in rec.message for rec in caplog.records)
+
+
+# --- PowerScaleDocumentLoader (requires langchain-core) ------------------
+
+def test_document_loader_yields_documents():
+    pytest.importorskip("langchain_core")
+    from powerscale_rag_connector import PowerScaleDocumentLoader
+
+    fake = FakeHelper(TUPLES)
+    loader = PowerScaleDocumentLoader(
+        es_host_url="http://localhost:9200",
+        es_index_name="idx",
+        es_api_key="key",
+        folder_path="/ifs/data",
+    )
+    loader._PowerScaleDocumentLoader__pshelper = fake
+
+    docs = list(loader.lazy_load())
+    assert len(docs) == 2
+    assert docs[0].page_content == ""
+    assert docs[0].metadata == {
+        "source": "/ifs/data/a.txt",
+        "snapshot": 10,
+        "lin": 1,
+        "change_types": ["ENTRY_ADDED"],
+    }
+    assert docs[1].metadata["change_types"] == ["ENTRY_MODIFIED"]
+
+
+def test_document_loader_force_scan_uses_zero():
+    pytest.importorskip("langchain_core")
+    from powerscale_rag_connector import PowerScaleDocumentLoader
+
+    fake = FakeHelper(TUPLES)
+    loader = PowerScaleDocumentLoader(
+        es_host_url="http://localhost:9200",
+        es_index_name="idx",
+        es_api_key="key",
+        folder_path="/ifs/data",
+        force_scan=True,
+    )
+    loader._PowerScaleDocumentLoader__pshelper = fake
+    list(loader.lazy_load())
+    assert fake.calls == [0]
+
+
+def test_document_loader_does_not_save_checkpoint_until_downstream_succeeds():
+    """If a downstream ingestion step fails after consuming all documents, the
+    checkpoint must not have been advanced.
+    """
+    pytest.importorskip("langchain_core")
+    from powerscale_rag_connector import PowerScaleDocumentLoader
+
+    class SavingFakeHelper:
+        def __init__(self, tuples):
+            self.tuples = list(tuples)
+            self.calls = []
+            self.save_calls = []
+
+        def get_directory_changes(self, snapshot_id=-1, save_checkpoint=True):
+            self.calls.append((snapshot_id, save_checkpoint))
+            for t in self.tuples:
+                yield t
+            if save_checkpoint:
+                self.save_calls.append(True)
+
+    fake = SavingFakeHelper(TUPLES)
+    loader = PowerScaleDocumentLoader(
+        es_host_url="http://localhost:9200",
+        es_index_name="idx",
+        es_api_key="key",
+        folder_path="/ifs/data",
+    )
+    loader._PowerScaleDocumentLoader__pshelper = fake
+
+    # Simulate an ingestion pipeline that consumes all docs then fails.
+    try:
+        docs = list(loader.lazy_load())
+        if docs:
+            raise RuntimeError("ingest failed after consumption")
+    except RuntimeError:
+        pass
+
+    # The helper should not have saved the checkpoint because downstream ingestion failed.
+    assert fake.save_calls == []
