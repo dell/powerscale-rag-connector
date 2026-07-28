@@ -150,7 +150,7 @@ reader = PowerScaleSimpleDirectoryReader(
     es_host_url="https://elasticsearch:9200",
     es_index_name="isi-metadataiq-index.cluster.guid",
     es_api_key="your-encoded-api-key",
-    input_dir="/ifs/data"
+    input_dir="/ifs/data",
     # Alternatively use input_files=[...] or dataset_name="my_dataset"
 )
 

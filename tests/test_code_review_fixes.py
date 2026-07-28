@@ -1,9 +1,8 @@
 """Tests for code review fixes: exclude_empty, raise_on_error, MRO safety.
 
-PowerScaleUnstructuredLoader/Reader no longer perform their own os.path.isfile
-checks; their tests below use FakePathLoader. PowerScaleSimpleDirectoryReader
-tests use FakeFS or patch os.path.isdir/os.path.isfile locally as needed, so no
-global os.path.isfile patch is required.
+PowerScaleUnstructuredLoader/Reader tests below use FakePathLoader.
+PowerScaleSimpleDirectoryReader tests use FakeFS or patch os.path.isdir locally
+as needed, so no global os.path.isfile patch is required.
 """
 
 from pathlib import Path

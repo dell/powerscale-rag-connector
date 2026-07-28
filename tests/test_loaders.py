@@ -15,12 +15,6 @@ from tests.conftest import FakeHelper
 from powerscale_rag_connector import PowerScalePathLoader
 
 
-@pytest.fixture(autouse=True)
-def _patch_isfile_for_loader_tests(monkeypatch):
-    """Treat test paths as existing files so existence checks do not short-circuit."""
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
-
-
 TUPLES = [
     (Path("/ifs/data/a.txt"), 10, 1, ["ENTRY_ADDED"]),
     (Path("/ifs/data/b.txt"), 11, 2, ["ENTRY_MODIFIED"]),
@@ -61,15 +55,13 @@ def test_path_loader_force_scan_uses_zero():
     assert fake.calls == [0]
 
 
-def test_path_loader_skips_missing_files_with_warning(monkeypatch, caplog):
-    """PowerScalePathLoader should skip MetadataIQ entries whose files do not exist locally."""
+def test_path_loader_yields_files_without_local_existence_check(monkeypatch):
+    """PowerScalePathLoader should not skip MetadataIQ entries based on local file existence."""
     fake = FakeHelper(TUPLES)
     loader = _make_path_loader(fake)
     monkeypatch.setattr("os.path.isfile", lambda p: False)
-    with caplog.at_level(logging.WARNING, logger="powerscale_rag_connector.PowerScalePathLoader"):
-        results = list(loader.lazy_load())
-    assert results == []
-    assert any("does not exist on the local filesystem" in rec.message for rec in caplog.records)
+    results = list(loader.lazy_load())
+    assert results == TUPLES
 
 
 # --- PowerScaleDocumentLoader (requires langchain-core) ------------------

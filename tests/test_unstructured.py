@@ -2,8 +2,6 @@
 
 These wrap third-party parsers; tests inject fakes for both the PowerScale path
 loader and the underlying parser so no filesystem or network access occurs.
-The internal PowerScalePathLoader now owns the missing-file existence check,
-so the unstructured loader/reader tests do not need to patch os.path.isfile.
 """
 
 from pathlib import Path

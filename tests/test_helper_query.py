@@ -160,6 +160,68 @@ def test_build_query_dataset_full_search_body_uses_inner_query(make_helper):
     assert {"match_all": {}} in _musts(q)
 
 
+def test_build_query_dataset_bool_must_as_single_dict(make_helper):
+    """Dataset query with bool.must as a single dict (valid ES DSL) should normalize to list."""
+    # Elasticsearch allows bool.must to be either a single clause or an array.
+    # The connector must normalize to a list before appending its own filters.
+    dataset_query = {"query": {"bool": {"must": {"term": {"data.tag": "x"}}}}}
+    helper = make_helper(
+        FakeElasticsearch(dataset_doc=dataset_query),
+        dataset_name="ds",
+    )
+    q = helper.build_query(all_files=True)
+    musts = _musts(q)
+    # Verify normalization happened: must is now a list
+    assert isinstance(q["bool"]["must"], list)
+    # Verify both the user's clause and the connector's filter are present
+    assert {"term": {"data.tag": "x"}} in musts
+    assert {"term": {"data.file_type": "regular"}} in musts
+
+
+def test_build_query_dataset_bool_should_only(make_helper):
+    """Dataset with only bool.should should get connector filters in bool.must."""
+    # A dataset query may use only "should" clauses. The connector must add its
+    # file_type filter to a new "must" array without breaking the should logic.
+    dataset_query = {
+        "query": {
+            "bool": {
+                "should": [{"term": {"data.tag": "x"}}, {"term": {"data.tag": "y"}}],
+                "minimum_should_match": 1,
+            }
+        }
+    }
+    helper = make_helper(
+        FakeElasticsearch(dataset_doc=dataset_query),
+        dataset_name="ds",
+    )
+    q = helper.build_query(all_files=True)
+    # The original should clauses must be preserved
+    assert "should" in q["bool"]
+    assert q["bool"]["should"] == [{"term": {"data.tag": "x"}}, {"term": {"data.tag": "y"}}]
+    assert q["bool"]["minimum_should_match"] == 1
+    # The connector's filter must be in a new must array
+    assert "must" in q["bool"]
+    assert {"term": {"data.file_type": "regular"}} in q["bool"]["must"]
+
+
+def test_build_query_dataset_bool_filter_only(make_helper):
+    """Dataset with only bool.filter should get connector filters in bool.must."""
+    # A dataset query may use only "filter" clauses. The connector must add its
+    # file_type filter to a new "must" array (not to filter, to preserve scoring).
+    dataset_query = {"query": {"bool": {"filter": [{"term": {"data.status": "active"}}]}}}
+    helper = make_helper(
+        FakeElasticsearch(dataset_doc=dataset_query),
+        dataset_name="ds",
+    )
+    q = helper.build_query(all_files=True)
+    # The original filter clauses must be preserved
+    assert "filter" in q["bool"]
+    assert q["bool"]["filter"] == [{"term": {"data.status": "active"}}]
+    # The connector's filter must be in a new must array
+    assert "must" in q["bool"]
+    assert {"term": {"data.file_type": "regular"}} in q["bool"]["must"]
+
+
 def test_build_query_no_scope_raises(make_helper):
     helper = make_helper(FakeElasticsearch(), folder_path="/ifs/data")
     # simulate a misconfigured helper with no active scope

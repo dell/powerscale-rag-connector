@@ -46,7 +46,7 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         required_exts: Optional[List[str]] = None,
         exclude_hidden: bool = True,
         exclude_empty: bool = False,
-        raise_on_error: bool = True,
+        raise_on_error: bool = False,
         fs: Optional[fsspec.AbstractFileSystem] = None,
     ) -> None:
         """Initialize the reader with a PowerScale-backed selection scope.
@@ -75,17 +75,18 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
             required_exts: (optional, inherited) Only include files with these extensions (e.g. [".pdf"]). Defaults to None.
             exclude_hidden: (optional, inherited) Skip hidden path components. Defaults to True.
             exclude_empty: (optional, inherited) Skip zero-byte files. Defaults to False.
-            raise_on_error: (optional, inherited) If True (default), the inner reader raises on parse errors and the checkpoint is not advanced, so the run can be retried. If False, errors are logged and skipped; the checkpoint still advances after the run completes.
+            raise_on_error: (optional, inherited) If True, the inner reader raises on parse errors
+                and the checkpoint is not advanced, so the run can be retried. If False (default),
+                errors are logged and skipped; the checkpoint still advances after the run completes.
             fs: (optional, inherited) File system to use. Defaults to local.
         """
-        # Normalize paths so the MetadataIQ helper and the local filesystem checks use
-        # the same canonical representation.
+        # Normalize paths for consistent representation.
         norm_input_dir = os.path.normpath(input_dir) if input_dir is not None else None
         norm_input_files = (
             [os.path.normpath(p) for p in input_files] if input_files is not None else None
         )
 
-        # Set the filesystem before validation to support existence checks.
+        # Set the filesystem before validation.
         self.fs = fs or get_default_fs()
 
         # Validate scope
@@ -243,19 +244,12 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         return any(match(start, 0) for start in range(n + 1))
 
     def _filter(self, path_str: str) -> bool:
-        """Apply local filters (exclude, existence, extension allow-list, hidden, empty, input_files, recursive)."""
+        """Apply local filters (exclude, extension allow-list, hidden, empty, input_files, recursive)."""
         p = os.path.normpath(path_str)
 
         if self._exclude_exact and any(
             self._match_exclude_pattern(p, pattern) for pattern in self._exclude_exact
         ):
-            return False
-
-        if not self.fs.isfile(p):
-            _logger.warning(
-                "Skipping %s: file returned by MetadataIQ does not exist on the configured filesystem",
-                p,
-            )
             return False
 
         # input_files mode: the ES query uses match_phrase on an analyzed text field,

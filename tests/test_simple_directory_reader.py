@@ -55,13 +55,11 @@ def test_is_hidden_false_for_normal_path():
 # --- _filter -------------------------------------------------------------
 
 def test_filter_excludes_exact_match(monkeypatch):
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = _bare_reader(_exclude_exact={"/ifs/data/skip.txt"})
     assert reader._filter("/ifs/data/skip.txt") is False
 
 
 def test_filter_excludes_glob_pattern(monkeypatch):
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = _bare_reader(_exclude_exact={"*.txt"})
     assert reader._filter("/ifs/data/a.txt") is False
     assert reader._filter("/ifs/data/subdir/b.txt") is False
@@ -69,7 +67,6 @@ def test_filter_excludes_glob_pattern(monkeypatch):
 
 
 def test_filter_excludes_recursive_double_star_pattern(monkeypatch):
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = _bare_reader(_exclude_exact={"/ifs/data/**/temp.*"})
     assert reader._filter("/ifs/data/subdir/temp.txt") is False
     assert reader._filter("/ifs/data/temp.txt") is False
@@ -78,40 +75,36 @@ def test_filter_excludes_recursive_double_star_pattern(monkeypatch):
 
 
 def test_filter_excludes_relative_recursive_double_star_pattern(monkeypatch):
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = _bare_reader(_exclude_exact={"**/temp.*"})
     assert reader._filter("/ifs/data/subdir/temp.txt") is False
     assert reader._filter("/ifs/data/temp.log") is False
     assert reader._filter("/ifs/data/subdir/not.txt") is True
 
 
-def test_filter_rejects_missing_file(monkeypatch):
+def test_filter_accepts_missing_file(monkeypatch):
+    """File existence is not verified at the reader/loader level."""
     monkeypatch.setattr("os.path.isfile", lambda p: False)
     reader = _bare_reader()
-    assert reader._filter("/ifs/data/gone.txt") is False
+    assert reader._filter("/ifs/data/gone.txt") is True
 
 
 def test_filter_required_exts(monkeypatch):
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = _bare_reader(required_exts={".pdf"})
     assert reader._filter("/ifs/data/doc.pdf") is True
     assert reader._filter("/ifs/data/doc.txt") is False
 
 
 def test_filter_required_exts_normalizes_without_dot(monkeypatch):
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = _bare_reader(required_exts={"pdf"})
     assert reader._filter("/ifs/data/doc.pdf") is True
 
 
 def test_filter_excludes_hidden(monkeypatch):
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = _bare_reader(exclude_hidden=True)
     assert reader._filter("/ifs/data/.hidden/file.txt") is False
 
 
 def test_filter_accepts_normal_file(monkeypatch):
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = _bare_reader()
     assert reader._filter("/ifs/data/file.txt") is True
 
@@ -188,7 +181,6 @@ def _reader_for_lazy(monkeypatch, tuples, child_docs, **attrs):
         **attrs,
     )
     reader._PowerScaleSimpleDirectoryReader__pshelper = FakeHelper(tuples)
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     monkeypatch.setattr(
         reader, "_child_reader", lambda files, meta_wrap: _FakeChildReader(child_docs)
     )
@@ -211,7 +203,6 @@ def test_lazy_load_data_force_scan_passes_zero(monkeypatch):
     fake = FakeHelper([(Path("/ifs/data/a.txt"), 10, 1, ["ENTRY_ADDED"])])
     reader = _bare_reader(_force_scan=True)
     reader._PowerScaleSimpleDirectoryReader__pshelper = fake
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     monkeypatch.setattr(
         reader, "_child_reader", lambda files, meta_wrap: _FakeChildReader(["x"])
     )
@@ -288,7 +279,6 @@ def test_init_input_files_empty_list_raises(monkeypatch):
 
 def test_init_input_files_valid_succeeds(monkeypatch):
     monkeypatch.setattr(SimpleDirectoryReader, "__init__", lambda self, **kw: None)
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = PowerScaleSimpleDirectoryReader(
         es_host_url="h", es_index_name="i", es_api_key="k",
         input_files=["/ifs/data/a.txt"],
@@ -315,7 +305,6 @@ def test_init_sets_base_attributes_for_input_dir(monkeypatch):
 
 def test_init_sets_base_attributes_for_input_files(monkeypatch):
     monkeypatch.setattr(SimpleDirectoryReader, "__init__", lambda self, **kw: None)
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = PowerScaleSimpleDirectoryReader(
         es_host_url="h", es_index_name="i", es_api_key="k",
         input_files=["/ifs/data/a.txt"],
@@ -336,7 +325,6 @@ def _reader_for_load_tests(monkeypatch, tuples, child_docs, **attrs):
     )
     fake = FakeHelper(tuples)
     reader._PowerScaleSimpleDirectoryReader__pshelper = fake
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     monkeypatch.setattr(
         reader, "_child_reader", lambda files, meta_wrap: _FakeChildReader(child_docs)
     )
@@ -413,7 +401,6 @@ def test_aload_data_empty_selection_saves_checkpoint(monkeypatch):
 # --- recursive=False / input_files filtering ------------------------------
 
 def test_filter_recursive_false_excludes_subdirectories(monkeypatch):
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = _bare_reader(
         _input_dir="/ifs/data",
         recursive=False,
@@ -439,7 +426,6 @@ def test_collect_files_recursive_false(monkeypatch):
 
 
 def test_filter_input_files_exact_match(monkeypatch):
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
     reader = _bare_reader(
         _explicit_files=["/ifs/data/allowed.txt"],
         _input_dir=None,
@@ -461,7 +447,6 @@ def test_collect_files_input_files_exact_match(monkeypatch):
         _input_dir=None,
     )
     reader._PowerScaleSimpleDirectoryReader__pshelper = FakeHelper(tuples)
-    monkeypatch.setattr("os.path.isfile", lambda p: True)
 
     def capture_child(files, meta_wrap):
         captured["files"] = list(files)
@@ -511,7 +496,7 @@ def test_init_dataset_name_rejects_other_scopes(monkeypatch):
 
 
 def test_init_input_files_missing_does_not_raise(monkeypatch):
-    """input_files existence is checked at load time, not at construction."""
+    """Missing input_files do not cause construction to fail."""
     monkeypatch.setattr(SimpleDirectoryReader, "__init__", lambda self, **kw: None)
     monkeypatch.setattr("os.path.isfile", lambda p: False)
     reader = PowerScaleSimpleDirectoryReader(
@@ -522,15 +507,8 @@ def test_init_input_files_missing_does_not_raise(monkeypatch):
 
 
 def test_load_data_forwards_fs_and_restores(monkeypatch):
-    """A per-call fs override is used for filtering and passed to the child, then restored."""
+    """A per-call fs override is passed to the child and restored."""
     class RecordingFS:
-        def __init__(self):
-            self.isfile_calls = []
-
-        def isfile(self, p):
-            self.isfile_calls.append(str(p))
-            return True
-
         def isdir(self, p):
             return True
 
@@ -557,7 +535,6 @@ def test_load_data_forwards_fs_and_restores(monkeypatch):
 
     docs = reader.load_data(fs=custom_fs)
     assert docs == ["doc"]
-    assert "/ifs/data/a.txt" in custom_fs.isfile_calls
     assert captured["fs"] is custom_fs
     assert reader.fs is original_fs
 
@@ -565,13 +542,6 @@ def test_load_data_forwards_fs_and_restores(monkeypatch):
 def test_aload_data_forwards_fs_and_restores(monkeypatch):
     """aload_data forwards the fs argument to load_data and restores it."""
     class RecordingFS:
-        def __init__(self):
-            self.isfile_calls = []
-
-        def isfile(self, p):
-            self.isfile_calls.append(str(p))
-            return True
-
         def isdir(self, p):
             return True
 
@@ -598,7 +568,6 @@ def test_aload_data_forwards_fs_and_restores(monkeypatch):
 
     docs = asyncio.run(reader.aload_data(fs=custom_fs))
     assert docs == ["doc"]
-    assert "/ifs/data/a.txt" in custom_fs.isfile_calls
     assert captured["fs"] is custom_fs
     assert reader.fs is original_fs
 

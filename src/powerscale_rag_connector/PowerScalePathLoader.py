@@ -3,8 +3,7 @@
 Yields ``(Path, snapshot, lin, change_types)`` tuples for files that changed
 since the last checkpoint.  It does not read file contents; pass the returned
 paths to ``PowerScaleUnstructuredLoader`` (LangChain) or
-``PowerScaleUnstructuredReader`` (LlamaIndex) to extract text.  Files missing
-from the local filesystem are skipped with a warning.
+``PowerScaleUnstructuredReader`` (LlamaIndex) to extract text.
 """
 
 import logging
@@ -97,28 +96,16 @@ class PowerScalePathLoader:
             # For normal operation, use get_directory_changes with default snapshot_id
             file_generator = self.__helper.get_directory_changes(save_checkpoint=False)
 
-        total = 0
-        yielded = 0
         for index, file_tuple in enumerate(file_generator, start=1):
-            total = index
             filepath, snapshot, lin, change_types = file_tuple
-            if not os.path.isfile(str(filepath)):
-                _logger.warning(
-                    "Skipping %s: file returned by MetadataIQ does not exist on the local filesystem",
-                    filepath,
-                )
-                continue
-            yielded += 1
             _logger.debug(
                 "File %d: %s (snapshot: %d) changes: %s",
-                yielded,
+                index,
                 filepath,
                 snapshot,
                 change_types,
             )
             yield file_tuple
-        else:
-            _logger.info("Total files found by MetadataIQ: %d", total)
 
     def save_checkpoint(self) -> None:
         """Persist the checkpoint after downstream ingestion has succeeded."""

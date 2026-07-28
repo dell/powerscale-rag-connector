@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`fs` parameter in `PowerScaleSimpleDirectoryReader`**: accepts an optional `fsspec.AbstractFileSystem` for custom filesystem support, matching `SimpleDirectoryReader` API compatibility.
-- **`raise_on_error` parameter in `PowerScaleUnstructuredLoader`, `PowerScaleUnstructuredReader`, and `PowerScaleSimpleDirectoryReader`**: controls whether parse errors are re-raised (True, default) or logged and skipped (False). Provides consistent, safe error handling across all loaders and readers.
+- **`raise_on_error` parameter in `PowerScaleUnstructuredLoader`, `PowerScaleUnstructuredReader`, and `PowerScaleSimpleDirectoryReader`**: controls whether parse errors are re-raised (`True`) or logged and skipped (`False`, default). Provides consistent, safe error handling across all loaders and readers.
 - **`dataset_name` parameter in `PowerScaleSimpleDirectoryReader`**: supports MetadataIQ dataset definitions as a third selection scope alongside `input_dir` and `input_files`.
 
 ### Changed
@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`requirements.txt` now uses `python-dotenv` instead of `dotenv`**: the `dotenv` package name does not provide the `dotenv.load_dotenv` import used by the examples; `python-dotenv` is the correct dependency.
 - **Standardized `force_scan` parameter documentation**: all loaders and readers now use the same `force_scan: Force scanning all data regardless of state` docstring.
 - **`PowerScaleUnstructuredLoader` per-file instantiation**: an `UnstructuredLoader` instance is created for each file as it is processed, because the underlying loader ties `file_path` to its construction. A future optimization could reuse a single instance if `langchain-unstructured` supports updating `file_path` after initialization.
-- **`PowerScaleDocumentLoader` and `PowerScaleSimpleDirectoryReader` now skip missing files returned by MetadataIQ**: `PowerScaleDocumentLoader` checks `os.path.isfile` before yielding a metadata-only `Document`, and `PowerScaleSimpleDirectoryReader._filter` drops files that do not exist on the configured `fsspec` filesystem. `PowerScaleUnstructuredLoader` and `PowerScaleUnstructuredReader` rely on the underlying parser raising for missing files, controlled by `raise_on_error`.
+- **Removed local filesystem existence checks from `PowerScaleDocumentLoader`, `PowerScalePathLoader`, and `PowerScaleSimpleDirectoryReader`**: loaders and readers no longer pre-verify that files exist on `os.path` or `fsspec` before yielding them; files returned by MetadataIQ are passed directly to downstream parsers. Missing files now surface as parser errors, controlled by `raise_on_error`.
+- **Tests updated to match the no-existence-check behavior**: `test_path_loader_yields_files_without_local_existence_check`, `test_filter_accepts_missing_file`, and the `fs` forwarding tests now assert that missing files are not pre-filtered and `isfile` is not called during filtering.
 - **Elasticsearch dependency pinned**: `pyproject.toml` and `requirements.txt` now require `elasticsearch>=8,<9` to ensure compatibility with the Elasticsearch 8.x API.
 - **`langchain` extra updated**: replaced `langchain-community` with `langchain-unstructured` (and `langchain-core`); `PowerScaleUnstructuredLoader` migrated to the new `langchain-unstructured` `UnstructuredLoader` and the `chunking_strategy` parameter. This is a breaking change for callers that previously passed `mode=` to `PowerScaleUnstructuredLoader`.
 - **`llamaindex` extra updated**: now includes `llama-index-readers-file` and `unstructured[pdf]`, which `PowerScaleUnstructuredReader` requires at runtime.

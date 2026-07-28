@@ -3,8 +3,7 @@
 Identifies files that changed since the last checkpoint and extracts their
 contents with ``langchain_unstructured.UnstructuredLoader``.  Each returned
 ``Document`` contains the extracted text in ``page_content`` and PowerScale
-metadata (``source``, ``snapshot``, ``lin``, ``change_types``).  Files missing
-from the local filesystem are skipped with a warning.
+metadata (``source``, ``snapshot``, ``lin``, ``change_types``).
 """
 
 import logging
@@ -34,7 +33,7 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         dataset_name: Optional[str] = None,
         chunking_strategy: Optional[str] = None,
         force_scan: bool = False,
-        raise_on_error: bool = True,
+        raise_on_error: bool = False,
         verify_ssl: bool = True,
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
@@ -55,7 +54,9 @@ class PowerScaleUnstructuredLoader(BaseLoader):
             dataset_name: The name of the MetadataIQ dataset to load. Note: dataset_name and folder_path are mutually exclusive
             chunking_strategy: (Optional; inherited) Chunking strategy passed to the wrapped loader (e.g. "basic", "by_title"). Defaults to None, which returns each document element as a separate Document. To replicate the old mode="single" behaviour (one merged Document per file), use chunking_strategy="basic" with a large max_characters value set via the unstructured library.
             force_scan: Force scanning all data regardless of state. Defaults to False.
-            raise_on_error: If True (default), re-raise parse errors after logging. If False, errors are logged and the generator continues with the next file; the checkpoint still advances after the run completes.
+            raise_on_error: If True, re-raise parse errors after logging. If False
+                (default), errors are logged and the generator continues with the next file; the
+                checkpoint still advances after the run completes.
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
             app_version: A version number for the checkpoint document. Defaults to 1.

@@ -2,8 +2,7 @@
 
 Identifies files that changed since the last checkpoint and yields one
 ``Document`` per file with an empty ``page_content`` and PowerScale metadata
-(``source``, ``snapshot``, ``lin``, ``change_types``).  Files missing from the
-local filesystem are skipped with a warning.  Use ``PowerScaleUnstructuredLoader``
+(``source``, ``snapshot``, ``lin``, ``change_types``).  Use ``PowerScaleUnstructuredLoader``
 to extract file contents.
 """
 
@@ -89,12 +88,6 @@ class PowerScaleDocumentLoader(BaseLoader):
             file_generator = self.__helper.get_directory_changes(save_checkpoint=False)
 
         for file, snapshot, lin, change_types in file_generator:
-            if not os.path.isfile(str(file)):
-                _logger.warning(
-                    "Skipping %s: file returned by MetadataIQ does not exist on the local filesystem",
-                    file,
-                )
-                continue
             metadata = {
                 "source": str(file),
                 "snapshot": snapshot,

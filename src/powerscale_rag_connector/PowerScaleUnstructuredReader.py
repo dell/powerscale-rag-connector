@@ -3,8 +3,7 @@
 Identifies files that changed since the last checkpoint and extracts their
 contents with ``llama_index.readers.file.UnstructuredReader``.  Each returned
 ``Document`` contains the extracted text in ``text`` and PowerScale metadata
-(``source``, ``snapshot``, ``lin``, ``change_types``).  Files missing from the
-local filesystem are skipped with a warning.
+(``source``, ``snapshot``, ``lin``, ``change_types``).
 """
 
 import logging
@@ -38,7 +37,7 @@ class PowerScaleUnstructuredReader(BaseReader):
         mode: str = "single",
         languages: Optional[List[str]] = None,
         force_scan: bool = False,
-        raise_on_error: bool = True,
+        raise_on_error: bool = False,
         verify_ssl: bool = True,
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
@@ -53,8 +52,9 @@ class PowerScaleUnstructuredReader(BaseReader):
             mode: Reader mode; "single" keeps file as one doc, "elements" yields element-level docs.
             languages: List of language codes for OCR hints (e.g. ["en"]). Defaults to ["en"].
             force_scan: Force scanning all data regardless of state
-            raise_on_error: If True (default), re-raise parse errors after logging.
-                If False, errors are logged and the generator continues with the next file; the checkpoint still advances after the run completes.
+            raise_on_error: If True, re-raise parse errors after logging. If False
+                (default), errors are logged and the generator continues with the next file;
+                the checkpoint still advances after the run completes.
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
             app_version: A version number for the checkpoint document. Defaults to 1.
