@@ -26,7 +26,7 @@ def test_build_query_folder_all_files(make_helper):
     helper = make_helper(FakeElasticsearch(), folder_path="/ifs/data")
     q = helper.build_query(all_files=True)
     musts = _musts(q)
-    assert {"match_phrase": {"data.path": "/ifs/data/"}} in musts
+    assert {"match_phrase_prefix": {"data.path": "/ifs/data"}} in musts
     assert {"term": {"data.file_type": "regular"}} in musts
     # no snapshot range filters when all_files=True
     assert not any("range" in m for m in musts)
@@ -44,28 +44,27 @@ def test_build_query_folder_incremental_adds_range(make_helper):
 def test_build_query_folder_trims_trailing_slash(make_helper):
     helper = make_helper(FakeElasticsearch(), folder_path="/ifs/data/sub/")
     q = helper.build_query(all_files=True)
-    assert {"match_phrase": {"data.path": "/ifs/data/sub/"}} in _musts(q)
+    assert {"match_phrase_prefix": {"data.path": "/ifs/data/sub"}} in _musts(q)
 
 
 def test_build_query_folder_trims_trailing_space(make_helper):
     helper = make_helper(FakeElasticsearch(), folder_path="/ifs/data/sub  ")
     q = helper.build_query(all_files=True)
-    assert {"match_phrase": {"data.path": "/ifs/data/sub/"}} in _musts(q)
+    assert {"match_phrase_prefix": {"data.path": "/ifs/data/sub"}} in _musts(q)
 
 
 def test_build_query_folder_trims_trailing_slash_and_space(make_helper):
     # Regression: slash followed by whitespace produced a double slash.
     helper = make_helper(FakeElasticsearch(), folder_path="/ifs/data/sub/ ")
     q = helper.build_query(all_files=True)
-    assert {"match_phrase": {"data.path": "/ifs/data/sub/"}} in _musts(q)
+    assert {"match_phrase_prefix": {"data.path": "/ifs/data/sub/"}} in _musts(q)
 
 
-def test_build_query_folder_no_match_phrase_prefix(make_helper):
-    """match_phrase_prefix silently truncates at max_expansions=50; match_phrase does not."""
+def test_build_query_folder_uses_match_phrase_prefix(make_helper):
+    """Folder-path queries use match_phrase_prefix, like langchain-midx/public."""
     helper = make_helper(FakeElasticsearch(), folder_path="/ifs/data")
     q = helper.build_query(all_files=True)
-    assert {"match_phrase": {"data.path": "/ifs/data/"}} in _musts(q)
-    assert not _contains_key(q, "match_phrase_prefix")
+    assert {"match_phrase_prefix": {"data.path": "/ifs/data"}} in _musts(q)
     assert not _contains_key(q, "max_expansions")
 
 

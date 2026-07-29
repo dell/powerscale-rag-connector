@@ -394,8 +394,8 @@ class PowerScaleHelper:
                             }
                         },
                         {
-                            "match_phrase": {
-                                "data.path": "/ifs/<path>/"
+                            "match_phrase_prefix": {
+                                "data.path": "/ifs/<path>"
                             }
                         }
                     ]
@@ -403,12 +403,15 @@ class PowerScaleHelper:
             }
         """
         if self.__folder_path is not None:
-            # build path query, trimming trailing whitespace and slashes, then
-            # re-adding a single trailing slash so /ifs/data/ does not false-match
-            # a sibling path like /ifs/databank when the field is a single token.
-            path = self.__folder_path.rstrip().rstrip("/") + "/"
+            # build path query, trimming trailing whitespace and slashes
+            path = self.__folder_path.rstrip("/").rstrip()
+            # match_phrase_prefix expands the last token of the folder path.
+            # Elasticsearch defaults max_expansions to 50; callers needing more
+            # distinct expansions can add that parameter to the query. The helper
+            # expects a concrete folder path (the files/folders to scan), not a
+            # prefix used to match many sibling folders.
             base_query = {
-                "bool": {"must": [{"match_phrase": {"data.path": path}}]}
+                "bool": {"must": [{"match_phrase_prefix": {"data.path": path}}]}
             }
         elif self.__dataset_name is not None:
             # use dataset definition query; tolerate both string-JSON and dict storage

@@ -35,13 +35,14 @@ langchain = [
   "langchain-unstructured",
   "langchain-elasticsearch",
   "langchain-nvidia-ai-endpoints",
+  "unstructured[pdf,doc,docx,xlsx,pptx,md]",
 ]
 llamaindex = [
   "llama-index",
   "llama-index-readers-file",
   "llama-index-embeddings-nvidia",
   "llama-index-vector-stores-elasticsearch",
-  "unstructured[pdf]",
+  "unstructured[pdf,doc,docx,xlsx,pptx,md]",
   "fsspec",
 ]
 nvingest = [
@@ -57,7 +58,7 @@ examples = [
   "llama-index-readers-file",
   "llama-index-embeddings-nvidia",
   "llama-index-vector-stores-elasticsearch",
-  "unstructured[pdf]",
+  "unstructured[pdf,doc,docx,xlsx,pptx,md]",
   "nv-ingest-client",
 ]
 # aggregate
@@ -71,7 +72,7 @@ all = [
   "llama-index-readers-file",
   "llama-index-embeddings-nvidia",
   "llama-index-vector-stores-elasticsearch",
-  "unstructured[pdf]",
+  "unstructured[pdf,doc,docx,xlsx,pptx,md]",
   "nv-ingest-client",
 ]
 test = [
