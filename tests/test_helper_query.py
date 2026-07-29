@@ -54,10 +54,10 @@ def test_build_query_folder_trims_trailing_space(make_helper):
 
 
 def test_build_query_folder_trims_trailing_slash_and_space(make_helper):
-    # Regression: slash followed by whitespace produced a double slash.
+    # Regression: slash followed by whitespace should be fully trimmed.
     helper = make_helper(FakeElasticsearch(), folder_path="/ifs/data/sub/ ")
     q = helper.build_query(all_files=True)
-    assert {"match_phrase_prefix": {"data.path": "/ifs/data/sub/"}} in _musts(q)
+    assert {"match_phrase_prefix": {"data.path": "/ifs/data/sub"}} in _musts(q)
 
 
 def test_build_query_folder_uses_match_phrase_prefix(make_helper):

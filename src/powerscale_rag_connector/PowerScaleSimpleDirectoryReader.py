@@ -8,6 +8,8 @@ from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Set, Tuple
 
+import fsspec
+
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.readers.file.base import BaseReader, get_default_fs, _DefaultFileMetadataFunc
 from llama_index.core.schema import Document

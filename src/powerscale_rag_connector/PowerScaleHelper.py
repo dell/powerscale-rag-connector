@@ -179,7 +179,8 @@ class PowerScaleHelper:
             return {}
         resp = self.__es.get(index=self.__dataset_index, id=self.__dataset_name)
         _logger.debug("Dataset query response: %s", resp)
-        return resp["_source"]
+        self.__dataset_doc = resp["_source"]
+        return self.__dataset_doc
 
     def update_latest_snapid(self) -> None:
         """Update the latest snapshot ID from the index"""
@@ -403,13 +404,11 @@ class PowerScaleHelper:
             }
         """
         if self.__folder_path is not None:
-            # build path query, trimming trailing whitespace and slashes
-            path = self.__folder_path.rstrip("/").rstrip()
-            # match_phrase_prefix expands the last token of the folder path.
-            # Elasticsearch defaults max_expansions to 50; callers needing more
-            # distinct expansions can add that parameter to the query. The helper
-            # expects a concrete folder path (the files/folders to scan), not a
-            # prefix used to match many sibling folders.
+            # Trim whitespace and trailing slashes. match_phrase_prefix on the
+            # analyzed data.path field may also match sibling directories (e.g.
+            # /ifs/data/foo can match /ifs/data/foobar), so get_directory_changes
+            # applies a post-filter to enforce the requested folder boundary.
+            path = self.__folder_path.strip().rstrip("/")
             base_query = {
                 "bool": {"must": [{"match_phrase_prefix": {"data.path": path}}]}
             }
@@ -521,6 +520,19 @@ class PowerScaleHelper:
             for document in self.match_files_by_snapshot(snapshot_id):
                 _logger.debug("ES returned the following document: %s", document)
                 file_path = document["_source"]["data"]["path"]
+
+                # match_phrase_prefix treats the last path token as a prefix, so a
+                # query for /ifs/data/foo also matches /ifs/data/foobar. Filter hits
+                # to files that are actually inside the requested folder.
+                if self.__folder_path is not None:
+                    normalized_folder = self.__folder_path.strip().rstrip("/")
+                    if file_path != normalized_folder and not file_path.startswith(normalized_folder + "/"):
+                        _logger.debug(
+                            "Skipping file outside folder scope: %s (folder: %s)",
+                            file_path, normalized_folder
+                        )
+                        continue
+                
                 snapshot = int(document["_source"]["metadata"]["snapshots"]["s2"])
                 lin = int(document["_source"]["data"]["lin"])
                 change_types = document["_source"]["data"].get("change_types") or []
@@ -590,6 +602,13 @@ class PowerScaleHelper:
         # Use match_files_by_snapshot directly so no checkpoint is written.
         for document in self.match_files_by_snapshot(snapshot_id=0):
             file_path = document["_source"]["data"]["path"]
+
+            # Apply folder boundary filter (same as get_directory_changes)
+            if self.__folder_path is not None:
+                normalized_folder = self.__folder_path.strip().rstrip("/")
+                if file_path != normalized_folder and not file_path.startswith(normalized_folder + "/"):
+                    continue
+
             snapshot = int(document["_source"]["metadata"]["snapshots"]["s2"])
             lin = int(document["_source"]["data"]["lin"])
             yield Path(file_path), snapshot, lin

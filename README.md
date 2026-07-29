@@ -177,12 +177,12 @@ documents = reader.load_data()
 
 ### Common reader/loader parameters
 
-All loaders/readers that parse file content share a PowerScale-specific `raise_on_error` switch. The default is `True` for all of them:
+All loaders/readers that parse file content share a PowerScale-specific `raise_on_error` switch. The default is `False` for all of them:
 
-- `PowerScaleUnstructuredLoader` / `PowerScaleUnstructuredReader`: `raise_on_error` (default `True`). If a file fails to parse, the exception is re-raised and ingestion stops; the checkpoint is not advanced. Set it to `False` to log the error and continue with the next file.
-- `PowerScaleSimpleDirectoryReader`: `raise_on_error` (default `True`). Parse errors are re-raised and the checkpoint is not advanced, so the run can be retried. Set it to `False` to log and skip parse errors; the checkpoint will still advance at the end of the run.
+- `PowerScaleUnstructuredLoader` / `PowerScaleUnstructuredReader`: `raise_on_error` (default `False`). If a file fails to parse, the error is logged and processing continues with the next file. The checkpoint advances at the end of the run, meaning failed files are not retried. Set it to `True` to re-raise the exception and stop ingestion; the checkpoint will not be advanced.
+- `PowerScaleSimpleDirectoryReader`: `raise_on_error` (default `False`). Parse errors are logged and skipped; the checkpoint advances at the end of the run. Set it to `True` to re-raise parse errors and prevent checkpoint advancement, so the run can be retried.
 
-When `raise_on_error` is `True` (default), the checkpoint is only advanced after all selected files have been successfully processed. When `raise_on_error` is `False`, failed files are skipped and the checkpoint advances at the end of the run, meaning failed files are not retried.
+When `raise_on_error` is `False` (default), failed files are logged and skipped, and the checkpoint advances at the end of the run, meaning failed files are not retried. When `raise_on_error` is `True`, the checkpoint is only advanced after all selected files have been successfully processed.
 
 ### Using as a Standalone Path Loader
 

@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Folder path boundary enforcement**: `get_directory_changes()` and `get_all_files()` now post-filter results to exclude sibling directories that `match_phrase_prefix` over-matches (e.g., `/ifs/data/foo` no longer returns files from `/ifs/data/foobar`).
+- **`refresh_dataset()` now updates internal state**: previously returned the refreshed dataset but did not update `__dataset_doc`, causing subsequent queries to use stale data.
+- **`fsspec` import for type annotation resolution**: `PowerScaleSimpleDirectoryReader` now imports `fsspec` so that `typing.get_type_hints()` can resolve the `fs` parameter annotation at runtime.
+- **Removed unused `os` imports**: cleaned up `PowerScaleDocumentLoader` and `PowerScalePathLoader`.
 - **`exclude_empty` now enforced in `PowerScaleSimpleDirectoryReader`**: zero-byte files are now correctly filtered when `exclude_empty=True`. Previously the parameter was stored but not checked during file filtering.
 - **`PowerScaleSimpleDirectoryReader` now uses `self.fs` for all filesystem operations**: directory and size checks use the configured `fsspec.AbstractFileSystem` instead of `os.path`, ensuring consistency with the base `SimpleDirectoryReader` behavior.
 - **`refresh_dataset()` missing `None` guard restored**: calling `refresh_dataset()` on a folder-path-scoped helper (where `dataset_name=None`) now returns `{}` instead of crashing with `TypeError` when passing `None` to `Elasticsearch.get(id=None)`.

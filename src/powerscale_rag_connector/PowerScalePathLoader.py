@@ -7,7 +7,6 @@ paths to ``PowerScaleUnstructuredLoader`` (LangChain) or
 """
 
 import logging
-import os
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
