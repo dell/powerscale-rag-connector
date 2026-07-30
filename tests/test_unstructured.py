@@ -1,7 +1,9 @@
 """Tests for PowerScaleUnstructuredLoader and PowerScaleUnstructuredReader.
 
-These wrap third-party parsers; tests inject fakes for both the PowerScale path
-loader and the underlying parser so no filesystem or network access occurs.
+Both classes *subclass* their framework parser (``langchain_unstructured.UnstructuredLoader``
+and ``llama_index.readers.file.UnstructuredReader``), so the tests patch the
+inherited parse method rather than a module-level symbol. The PowerScale path
+loader is faked so no filesystem or network access occurs.
 """
 
 from pathlib import Path
@@ -24,23 +26,28 @@ class FakePathLoader:
 
 # --- PowerScaleUnstructuredLoader (langchain) ---------------------------
 
+def test_unstructured_loader_is_a_langchain_unstructured_loader():
+    """The loader must derive from the framework class it wraps."""
+    pytest.importorskip("langchain_unstructured")
+    from langchain_core.document_loaders import BaseLoader
+    from langchain_unstructured import UnstructuredLoader
+    from powerscale_rag_connector import PowerScaleUnstructuredLoader
+
+    assert issubclass(PowerScaleUnstructuredLoader, UnstructuredLoader)
+    assert issubclass(PowerScaleUnstructuredLoader, BaseLoader)
+
+
 def test_unstructured_loader_sets_metadata(monkeypatch):
     pytest.importorskip("langchain_unstructured")
     pytest.importorskip("langchain_core")
     from langchain_core.documents import Document
+    from langchain_unstructured import UnstructuredLoader
     from powerscale_rag_connector import PowerScaleUnstructuredLoader
-    import importlib
-    mod = importlib.import_module("powerscale_rag_connector.PowerScaleUnstructuredLoader")
 
-    class FakeUnstructuredLoader:
-        def __init__(self, file_path=None, **kwargs):
-            self.file_path = file_path
-            self.kwargs = kwargs
+    def fake_lazy_load(self):
+        yield Document(page_content="chunk", metadata={})
 
-        def lazy_load(self):
-            yield Document(page_content="chunk", metadata={})
-
-    monkeypatch.setattr(mod, "UnstructuredLoader", FakeUnstructuredLoader)
+    monkeypatch.setattr(UnstructuredLoader, "lazy_load", fake_lazy_load)
 
     loader = PowerScaleUnstructuredLoader(
         es_host_url="h", es_index_name="i", es_api_key="k", folder_path="/ifs/data"
@@ -57,52 +64,52 @@ def test_unstructured_loader_sets_metadata(monkeypatch):
     assert docs[0].metadata["change_types"] == ["ENTRY_ADDED"]
 
 
-def test_unstructured_loader_passes_chunking_strategy(monkeypatch):
+def test_unstructured_loader_passes_chunking_strategy():
+    """chunking_strategy must land in the inherited loader's partition kwargs."""
     pytest.importorskip("langchain_unstructured")
     pytest.importorskip("langchain_core")
-    from langchain_core.documents import Document
     from powerscale_rag_connector import PowerScaleUnstructuredLoader
-    import importlib
-    mod = importlib.import_module("powerscale_rag_connector.PowerScaleUnstructuredLoader")
-
-    captured = {}
-
-    class FakeUnstructuredLoader:
-        def __init__(self, file_path=None, **kwargs):
-            captured.update(kwargs)
-
-        def lazy_load(self):
-            yield Document(page_content="c", metadata={})
-
-    monkeypatch.setattr(mod, "UnstructuredLoader", FakeUnstructuredLoader)
 
     loader = PowerScaleUnstructuredLoader(
         es_host_url="h", es_index_name="i", es_api_key="k",
         folder_path="/ifs/data", chunking_strategy="basic",
     )
-    loader.path_loader = FakePathLoader([(Path("/ifs/data/a.txt"), 10, 1, [])])
-    list(loader.lazy_load())
-    assert captured.get("chunking_strategy") == "basic"
+    assert loader.unstructured_kwargs.get("chunking_strategy") == "basic"
 
 
-def test_unstructured_loader_creates_loader_per_file(monkeypatch):
+def test_unstructured_loader_forwards_extra_unstructured_kwargs():
+    """Arbitrary UnstructuredLoader options must pass through to the parent."""
+    pytest.importorskip("langchain_unstructured")
+    from powerscale_rag_connector import PowerScaleUnstructuredLoader
+
+    loader = PowerScaleUnstructuredLoader(
+        es_host_url="h", es_index_name="i", es_api_key="k",
+        folder_path="/ifs/data", languages=["en", "de"], strategy="hi_res",
+    )
+    assert loader.unstructured_kwargs["languages"] == ["en", "de"]
+    assert loader.unstructured_kwargs["strategy"] == "hi_res"
+
+
+def test_unstructured_loader_retargets_file_path_per_file(monkeypatch):
+    """One inherited loader instance is reused, retargeted at each file in turn.
+
+    ``UnstructuredLoader.lazy_load()`` reads ``self.file_path`` at call time and
+    holds no other per-file state, so reassigning it is sufficient and avoids
+    rebuilding the Unstructured client for every file.
+    """
     pytest.importorskip("langchain_unstructured")
     pytest.importorskip("langchain_core")
     from langchain_core.documents import Document
+    from langchain_unstructured import UnstructuredLoader
     from powerscale_rag_connector import PowerScaleUnstructuredLoader
-    import importlib
-    mod = importlib.import_module("powerscale_rag_connector.PowerScaleUnstructuredLoader")
 
-    calls = []
+    seen = []
 
-    class FakeUnstructuredLoader:
-        def __init__(self, file_path=None, **kwargs):
-            calls.append((file_path, kwargs))
+    def fake_lazy_load(self):
+        seen.append((self.file_path, dict(self.unstructured_kwargs)))
+        yield Document(page_content="chunk", metadata={})
 
-        def lazy_load(self):
-            yield Document(page_content="chunk", metadata={})
-
-    monkeypatch.setattr(mod, "UnstructuredLoader", FakeUnstructuredLoader)
+    monkeypatch.setattr(UnstructuredLoader, "lazy_load", fake_lazy_load)
 
     loader = PowerScaleUnstructuredLoader(
         es_host_url="h",
@@ -119,25 +126,22 @@ def test_unstructured_loader_creates_loader_per_file(monkeypatch):
     )
 
     list(loader.lazy_load())
-    assert len(calls) == 2
-    assert calls[0] == ("/ifs/data/a.txt", {"chunking_strategy": "basic"})
-    assert calls[1] == ("/ifs/data/b.txt", {"chunking_strategy": "basic"})
+    assert seen == [
+        ("/ifs/data/a.txt", {"chunking_strategy": "basic"}),
+        ("/ifs/data/b.txt", {"chunking_strategy": "basic"}),
+    ]
 
 
 def test_unstructured_loader_skips_parser_error_when_false(monkeypatch):
     pytest.importorskip("langchain_unstructured")
+    from langchain_unstructured import UnstructuredLoader
     from powerscale_rag_connector import PowerScaleUnstructuredLoader
-    import importlib
-    mod = importlib.import_module("powerscale_rag_connector.PowerScaleUnstructuredLoader")
 
-    class ExplodingLoader:
-        def __init__(self, file_path=None, **kwargs):
-            pass
+    def exploding_lazy_load(self):
+        raise RuntimeError("parse failed")
+        yield  # pragma: no cover - keeps this a generator function
 
-        def lazy_load(self):
-            raise RuntimeError("parse failed")
-
-    monkeypatch.setattr(mod, "UnstructuredLoader", ExplodingLoader)
+    monkeypatch.setattr(UnstructuredLoader, "lazy_load", exploding_lazy_load)
     loader = PowerScaleUnstructuredLoader(
         es_host_url="h", es_index_name="i", es_api_key="k", folder_path="/ifs/data",
         raise_on_error=False,
@@ -148,6 +152,17 @@ def test_unstructured_loader_skips_parser_error_when_false(monkeypatch):
 
 
 # --- PowerScaleUnstructuredReader (llama_index) -------------------------
+
+def test_unstructured_reader_is_a_llamaindex_unstructured_reader():
+    """The reader must derive from the framework class it wraps."""
+    pytest.importorskip("llama_index.readers.file")
+    from llama_index.core.readers.base import BaseReader
+    from llama_index.readers.file import UnstructuredReader
+    from powerscale_rag_connector import PowerScaleUnstructuredReader
+
+    assert issubclass(PowerScaleUnstructuredReader, UnstructuredReader)
+    assert issubclass(PowerScaleUnstructuredReader, BaseReader)
+
 
 def test_unstructured_reader_mode_maps_to_split_documents():
     pytest.importorskip("llama_index.core")
@@ -183,19 +198,18 @@ def test_unstructured_reader_sets_metadata(monkeypatch):
     from llama_index.core import Document
     from powerscale_rag_connector import PowerScaleUnstructuredReader
 
+    from llama_index.readers.file import UnstructuredReader
+
     reader = PowerScaleUnstructuredReader(
         es_host_url="h", es_index_name="i", es_api_key="k",
         folder_path="/ifs/data", mode="elements",
     )
 
-    class FakeReader:
-        def load_data(self, file=None, split_documents=None, unstructured_kwargs=None):
-            languages = (unstructured_kwargs or {}).get("languages")
-            return [Document(text="parsed", metadata={"languages": languages})]
+    def fake_load_data(self, file=None, unstructured_kwargs=None, **kwargs):
+        languages = (unstructured_kwargs or {}).get("languages")
+        return [Document(text="parsed", metadata={"languages": languages})]
 
-    import importlib
-    mod = importlib.import_module("powerscale_rag_connector.PowerScaleUnstructuredReader")
-    monkeypatch.setattr(mod, "UnstructuredReader", FakeReader)
+    monkeypatch.setattr(UnstructuredReader, "load_data", fake_load_data)
     reader.path_loader = FakePathLoader(
         [(Path("/ifs/data/a.txt"), 10, 1, ["ENTRY_MODIFIED"])]
     )
@@ -214,43 +228,36 @@ def test_unstructured_reader_skips_parser_error_when_false(monkeypatch):
     pytest.importorskip("llama_index.readers.file")
     from powerscale_rag_connector import PowerScaleUnstructuredReader
 
+    from llama_index.readers.file import UnstructuredReader
+
     reader = PowerScaleUnstructuredReader(
         es_host_url="h", es_index_name="i", es_api_key="k", folder_path="/ifs/data",
         raise_on_error=False,
     )
 
-    class ExplodingReader:
-        def load_data(self, **kwargs):
-            raise RuntimeError("parse failed")
+    def exploding_load_data(self, **kwargs):
+        raise RuntimeError("parse failed")
 
-    import importlib
-    mod = importlib.import_module("powerscale_rag_connector.PowerScaleUnstructuredReader")
-    monkeypatch.setattr(mod, "UnstructuredReader", ExplodingReader)
+    monkeypatch.setattr(UnstructuredReader, "load_data", exploding_load_data)
     reader.path_loader = FakePathLoader([(Path("/ifs/data/a.txt"), 10, 1, [])])
     assert list(reader.lazy_load_data()) == []
 
 
-def test_unstructured_reader_creates_reader_per_file(monkeypatch):
-    """PowerScaleUnstructuredReader must create a new UnstructuredReader per file
-    to avoid retained state leaking between files.
-    """
+def test_unstructured_reader_parses_each_file_via_inherited_load_data(monkeypatch):
+    """Each discovered file is parsed through the inherited single-file load_data."""
     pytest.importorskip("llama_index.core")
     pytest.importorskip("llama_index.readers.file")
+    from llama_index.core import Document
+    from llama_index.readers.file import UnstructuredReader
     from powerscale_rag_connector import PowerScaleUnstructuredReader
-    import importlib
-    mod = importlib.import_module("powerscale_rag_connector.PowerScaleUnstructuredReader")
 
-    calls = []
+    seen = []
 
-    class FakeUnstructuredReader:
-        def __init__(self):
-            calls.append("init")
+    def fake_load_data(self, file=None, split_documents=None, **kwargs):
+        seen.append((str(file), split_documents))
+        return [Document(text="chunk", metadata={})]
 
-        def load_data(self, file=None, split_documents=None, unstructured_kwargs=None):
-            from llama_index.core import Document
-            return [Document(text="chunk", metadata={})]
-
-    monkeypatch.setattr(mod, "UnstructuredReader", FakeUnstructuredReader)
+    monkeypatch.setattr(UnstructuredReader, "load_data", fake_load_data)
 
     reader = PowerScaleUnstructuredReader(
         es_host_url="h",
@@ -265,4 +272,34 @@ def test_unstructured_reader_creates_reader_per_file(monkeypatch):
     ])
 
     list(reader.lazy_load_data())
-    assert len(calls) == 2
+    assert seen == [("/ifs/data/a.txt", True), ("/ifs/data/b.txt", True)]
+
+
+def test_unstructured_reader_load_data_with_file_delegates_to_parent(monkeypatch):
+    """Passing ``file=`` must keep the upstream UnstructuredReader contract.
+
+    The PowerScale scan must not run in that case.
+    """
+    pytest.importorskip("llama_index.readers.file")
+    from llama_index.core import Document
+    from llama_index.readers.file import UnstructuredReader
+    from powerscale_rag_connector import PowerScaleUnstructuredReader
+
+    def fake_load_data(self, file=None, **kwargs):
+        return [Document(text=f"parent:{file}", metadata={})]
+
+    monkeypatch.setattr(UnstructuredReader, "load_data", fake_load_data)
+
+    reader = PowerScaleUnstructuredReader(
+        es_host_url="h", es_index_name="i", es_api_key="k", folder_path="/ifs/data",
+    )
+
+    def fail():
+        raise AssertionError("PowerScale scan must not run when file= is given")
+
+    reader.path_loader = type(
+        "Boom", (), {"lazy_load": lambda self: fail(), "save_checkpoint": lambda self: None}
+    )()
+
+    docs = reader.load_data(file=Path("/ifs/data/explicit.txt"))
+    assert [d.text for d in docs] == ["parent:/ifs/data/explicit.txt"]

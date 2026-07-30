@@ -73,7 +73,7 @@ def test_get_directory_changes_saves_checkpoint_on_completion(make_helper):
     pages = [[make_hit("/ifs/data/a", 1, 10, change_types=["ENTRY_ADDED"], mtime=321)]]
     fake = FakeElasticsearch(search_pages=pages, max_snapid=10)
     helper = make_helper(fake, folder_path="/ifs/data")
-    list(helper.get_directory_changes())
+    list(helper.get_directory_changes(save_checkpoint=True))
     assert len(fake.indexed) == 1
     written = fake.indexed[0]["document"]["folder_paths"][0]
     assert written["snapshot"] == 10
@@ -125,7 +125,7 @@ def test_incremental_run_with_new_and_modified_files(make_helper):
     ]]
     fake1 = FakeElasticsearch(search_pages=first_pages, max_snapid=10)
     helper1 = make_helper(fake1, folder_path="/ifs/data")
-    first_results = list(helper1.get_directory_changes())
+    first_results = list(helper1.get_directory_changes(save_checkpoint=True))
     # First run reclassifies ENTRY_MODIFIED to ENTRY_ADDED.
     first_change_types = {str(p): ct for p, _s, _l, ct in first_results}
     assert first_change_types["/ifs/data/new.txt"] == ["ENTRY_ADDED"]
@@ -146,7 +146,7 @@ def test_incremental_run_with_new_and_modified_files(make_helper):
         max_snapid=20,
     )
     helper2 = make_helper(fake2, folder_path="/ifs/data")
-    second_results = list(helper2.get_directory_changes())
+    second_results = list(helper2.get_directory_changes(save_checkpoint=True))
     second_change_types = {str(p): ct for p, _s, _l, ct in second_results}
 
     # Incremental run preserves ENTRY_MODIFIED for modified files.
@@ -211,7 +211,7 @@ def test_empty_run_does_not_zero_saved_mtime_and_misclassify_modified(make_helpe
     # First run: no files, snapshot advances to 10, saved_mtime is written as 0.
     fake1 = FakeElasticsearch(search_pages=[], max_snapid=10)
     helper1 = make_helper(fake1, folder_path="/ifs/data")
-    list(helper1.get_directory_changes())
+    list(helper1.get_directory_changes(save_checkpoint=True))
     assert len(fake1.indexed) == 1
     written_checkpoint = fake1.indexed[0]["document"]
 
@@ -234,7 +234,96 @@ def test_empty_run_does_not_zero_saved_mtime_and_misclassify_modified(make_helpe
         max_snapid=20,
     )
     helper2 = make_helper(fake2, folder_path="/ifs/data")
-    results = list(helper2.get_directory_changes())
+    results = list(helper2.get_directory_changes(save_checkpoint=True))
+    assert results[0][3] == ["ENTRY_MODIFIED"]
+
+
+# --- scope boundary enforcement ------------------------------------------
+
+def test_input_files_scope_rejects_descendant_and_sibling_paths(make_helper):
+    """input_files uses match_phrase on the analyzed data.path field, so ES also
+    returns descendants and adjacent-token paths. Only exact matches may be yielded.
+    """
+    requested = "/ifs/data/report"
+    pages = [[
+        make_hit(requested, 1, 10, change_types=["ENTRY_ADDED"]),
+        make_hit("/ifs/data/report/inner.txt", 2, 10, change_types=["ENTRY_ADDED"]),
+        make_hit("/ifs/data/report.bak", 3, 10, change_types=["ENTRY_ADDED"]),
+    ]]
+    fake = FakeElasticsearch(search_pages=pages, max_snapid=10)
+    helper = make_helper(fake, input_files=[requested])
+
+    paths = [str(p) for p, *_ in helper.get_directory_changes()]
+    assert paths == [requested]
+
+
+def test_get_all_files_input_files_scope_rejects_descendants(make_helper):
+    """get_all_files() must apply the same input_files boundary as get_directory_changes."""
+    requested = "/ifs/data/report"
+    pages = [[
+        make_hit(requested, 1, 10),
+        make_hit("/ifs/data/report/inner.txt", 2, 10),
+    ]]
+    fake = FakeElasticsearch(search_pages=pages, max_snapid=10)
+    helper = make_helper(fake, input_files=[requested])
+
+    paths = [str(p) for p, *_ in helper.get_all_files()]
+    assert paths == [requested]
+
+
+def test_input_files_scope_accepts_every_requested_path(make_helper):
+    """The boundary filter must not drop legitimately requested files."""
+    requested = ["/ifs/data/a.txt", "/ifs/data/nested/b.txt"]
+    pages = [[
+        make_hit(requested[0], 1, 10, change_types=["ENTRY_ADDED"]),
+        make_hit(requested[1], 2, 10, change_types=["ENTRY_ADDED"]),
+    ]]
+    fake = FakeElasticsearch(search_pages=pages, max_snapid=10)
+    helper = make_helper(fake, input_files=list(requested))
+
+    paths = sorted(str(p) for p, *_ in helper.get_directory_changes())
+    assert paths == sorted(requested)
+
+
+# --- force_scan change-type semantics -------------------------------------
+
+def test_force_scan_on_fresh_checkpoint_reclassifies_modified_as_added(make_helper):
+    """A force scan with no saved checkpoint is still a first ingest.
+
+    Nothing has been indexed downstream yet, so ENTRY_MODIFIED must be promoted
+    to ENTRY_ADDED exactly as it is on a normal first run. Otherwise callers issue
+    a delete-before-reindex for vectors that were never written.
+    """
+    hit = make_hit(
+        "/ifs/data/a.txt", 1, 10, change_types=["ENTRY_MODIFIED"], btime=5, mtime=100
+    )
+
+    fake_default = FakeElasticsearch(search_pages=[[hit]], max_snapid=10)
+    helper_default = make_helper(fake_default, folder_path="/ifs/data")
+    default_run = list(helper_default.get_directory_changes())
+
+    fake_forced = FakeElasticsearch(search_pages=[[hit]], max_snapid=10)
+    helper_forced = make_helper(fake_forced, folder_path="/ifs/data")
+    forced_run = list(helper_forced.get_directory_changes(snapshot_id=0))
+
+    assert default_run[0][3] == ["ENTRY_ADDED"]
+    assert forced_run[0][3] == ["ENTRY_ADDED"]
+
+
+def test_force_scan_with_existing_checkpoint_keeps_modified(make_helper):
+    """Once a checkpoint exists, a force scan must not fake ENTRY_ADDED."""
+    doc = {
+        "folder_paths": [
+            {"path": "/ifs/data", "version": 1, "snapshot": 5, "saved_mtime": 50}
+        ]
+    }
+    hit = make_hit(
+        "/ifs/data/a.txt", 1, 10, change_types=["ENTRY_MODIFIED"], btime=1, mtime=100
+    )
+    fake = FakeElasticsearch(checkpoint_doc=doc, search_pages=[[hit]], max_snapid=10)
+    helper = make_helper(fake, folder_path="/ifs/data")
+
+    results = list(helper.get_directory_changes(snapshot_id=0))
     assert results[0][3] == ["ENTRY_MODIFIED"]
 
 

@@ -9,10 +9,9 @@ contents with ``llama_index.readers.file.UnstructuredReader``.  Each returned
 import logging
 import warnings
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 from llama_index.core import Document
-from llama_index.core.readers.base import BaseReader
 from llama_index.readers.file import UnstructuredReader  # requires `llama-index-readers-file`
 
 from .PowerScalePathLoader import PowerScalePathLoader
@@ -20,11 +19,13 @@ from .PowerScalePathLoader import PowerScalePathLoader
 _logger = logging.getLogger(__name__)
 
 
-class PowerScaleUnstructuredReader(BaseReader):
+class PowerScaleUnstructuredReader(UnstructuredReader):
     """PowerScale LlamaIndex UnstructuredReader.
 
-    Loads files via LlamaIndex's ``UnstructuredReader``, leveraging
-    PowerScale MetadataIQ to efficiently find files that have changed.
+    Subclasses ``llama_index.readers.file.UnstructuredReader`` so the upstream
+    single-file contract is preserved: calling ``load_data(file=...)`` behaves
+    exactly as the parent does.  Calling ``load_data()`` with no ``file``
+    instead scans PowerScale MetadataIQ and parses every changed file.
     """
 
     def __init__(
@@ -41,6 +42,10 @@ class PowerScaleUnstructuredReader(BaseReader):
         verify_ssl: bool = True,
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
+        api_key: Optional[str] = None,
+        url: Optional[str] = None,
+        allowed_metadata_types: Optional[Tuple] = None,
+        excluded_metadata_keys: Optional[Set] = None,
     ) -> None:
         """
         Args:
@@ -58,30 +63,61 @@ class PowerScaleUnstructuredReader(BaseReader):
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
             app_version: A version number for the checkpoint document. Defaults to 1.
+            api_key: (optional, inherited) Unstructured.io API key. Defaults to None (local parsing).
+            url: (optional, inherited) Unstructured.io API URL. Ignored unless `api_key` is set.
+            allowed_metadata_types: (optional, inherited) Types permitted in document metadata.
+            excluded_metadata_keys: (optional, inherited) Metadata keys to drop from documents.
         """
-        self.__folder_path = folder_path
-        self.__dataset_name = dataset_name
+        super().__init__(
+            api_key=api_key,
+            url=url,
+            allowed_metadata_types=allowed_metadata_types,
+            excluded_metadata_keys=excluded_metadata_keys,
+        )
+
         self.__split_documents = (mode == "elements")  # map mode string to LlamaIndex split_documents flag
         self.__languages = languages if languages is not None else ["en"]
-        self.__force_scan = force_scan
         self.__raise_on_error = raise_on_error
-        self.__verify_ssl = verify_ssl
-        self.__app_name = app_name
-        self.__app_version = app_version
 
         self.path_loader = PowerScalePathLoader(
             es_host_url=es_host_url,
             es_index_name=es_index_name,
             es_api_key=es_api_key,
-            folder_path=self.__folder_path,
-            dataset_name=self.__dataset_name,
-            force_scan=self.__force_scan,
-            verify_ssl=self.__verify_ssl,
-            app_name=self.__app_name,
-            app_version=self.__app_version,
+            folder_path=folder_path,
+            dataset_name=dataset_name,
+            force_scan=force_scan,
+            verify_ssl=verify_ssl,
+            app_name=app_name,
+            app_version=app_version,
         )
 
-    def load_data(self, show_progress: bool = False) -> List[Document]:
+    def load_data(
+        self,
+        file: Optional[Path] = None,
+        unstructured_kwargs: Optional[Dict] = None,
+        document_kwargs: Optional[Dict] = None,
+        extra_info: Optional[Dict] = None,
+        split_documents: Optional[bool] = None,
+        excluded_metadata_keys: Optional[List[str]] = None,
+        show_progress: bool = False,
+    ) -> List[Document]:
+        """Load Documents, either from PowerScale or from a single explicit file.
+
+        Keeps the inherited ``UnstructuredReader.load_data`` contract: when
+        ``file`` is provided the call is delegated straight to the parent. When
+        ``file`` is omitted, PowerScale MetadataIQ selects the files to parse.
+        """
+        if file is not None:
+            return super().load_data(
+                file=file,
+                unstructured_kwargs=unstructured_kwargs,
+                document_kwargs=document_kwargs,
+                extra_info=extra_info,
+                split_documents=(
+                    self.__split_documents if split_documents is None else split_documents
+                ),
+                excluded_metadata_keys=excluded_metadata_keys,
+            )
         return list(self.lazy_load_data())
 
     def lazy_load_data(self) -> Iterator[Document]:
@@ -89,13 +125,12 @@ class PowerScaleUnstructuredReader(BaseReader):
         Lazily yield LlamaIndex Documents from files discovered by PowerScalePathLoader.
         """
         for file_path, snapshot, lin, change_types in self.path_loader.lazy_load():
-            reader = UnstructuredReader()
             try:
                 # Suppress LlamaIndex doc_id deprecation warning emitted during load;
                 # scoped here so it does not affect any other code in the process.
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", message="'doc_id' is deprecated")
-                    docs = reader.load_data(
+                    docs = super().load_data(
                         file=Path(file_path),
                         split_documents=self.__split_documents,
                         unstructured_kwargs={"languages": self.__languages},
@@ -116,3 +151,12 @@ class PowerScaleUnstructuredReader(BaseReader):
         # Only commit the checkpoint once all files have been processed.
         self.path_loader.save_checkpoint()
 
+    def save_checkpoint(self) -> None:
+        """Persist the checkpoint after downstream ingestion has succeeded.
+
+        Note: ``load_data()`` and ``lazy_load_data()`` already commit the
+        checkpoint when the generator is exhausted.  Calling this method
+        explicitly is safe but typically unnecessary unless you break out of
+        the generator early and still want to advance the checkpoint.
+        """
+        self.path_loader.save_checkpoint()

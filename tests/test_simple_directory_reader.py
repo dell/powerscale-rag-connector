@@ -229,14 +229,19 @@ def test_init_input_dir_must_start_with_ifs(monkeypatch):
         )
 
 
-def test_init_input_dir_must_exist(monkeypatch):
+def test_init_input_dir_not_checked_against_local_filesystem(monkeypatch):
+    """input_dir must not be validated against the local filesystem.
+
+    File discovery is delegated to MetadataIQ, so the connector has to work from
+    hosts where /ifs is not mounted.
+    """
     monkeypatch.setattr(SimpleDirectoryReader, "__init__", lambda self, **kw: None)
     monkeypatch.setattr("os.path.isdir", lambda p: False)
-    with pytest.raises(ValueError, match="Directory does not exist"):
-        PowerScaleSimpleDirectoryReader(
-            es_host_url="h", es_index_name="i", es_api_key="k",
-            input_dir="/ifs/missing",
-        )
+    reader = PowerScaleSimpleDirectoryReader(
+        es_host_url="h", es_index_name="i", es_api_key="k",
+        input_dir="/ifs/missing",
+    )
+    assert reader._input_dir == "/ifs/missing"
 
 
 def test_init_input_files_validation(monkeypatch):

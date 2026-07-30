@@ -5,7 +5,6 @@ FakeHelper via the name-mangled ``__pshelper`` slot to avoid touching
 Elasticsearch.
 """
 
-import logging
 from pathlib import Path
 
 import pytest

@@ -82,3 +82,13 @@ test = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# Correctness and hygiene only. Style-modernization rules (I, UP) are omitted so
+# the public type annotations stay stable for consumers on older type checkers.
+select = ["E", "F", "W", "B", "C4"]
+ignore = ["E501"]  # line length is not enforced; see line-length above

@@ -83,6 +83,16 @@ def make_not_found() -> Exception:
     return exceptions.NotFoundError.__new__(exceptions.NotFoundError)
 
 
+def make_conflict() -> Exception:
+    """Build an elasticsearch ConflictError across client minor-version signatures."""
+    for kwargs in ({"meta": None, "body": None}, {}):
+        try:
+            return exceptions.ConflictError("conflict", **kwargs)  # type: ignore[arg-type]
+        except TypeError:
+            continue
+    return exceptions.ConflictError.__new__(exceptions.ConflictError)
+
+
 def make_hit(path, lin, snapshot, change_types=None, btime=0, mtime=0):
     """Construct a single MetadataIQ-style search hit."""
     return {
@@ -114,6 +124,9 @@ class FakeElasticsearch:
         dataset_doc=None,
         raise_on_agg=None,
         raise_on_search=None,
+        seq_no=None,
+        primary_term=None,
+        conflicts=0,
     ):
         # checkpoint_doc None => NotFoundError on checkpoint get (first run)
         self.checkpoint_doc = checkpoint_doc
@@ -123,6 +136,11 @@ class FakeElasticsearch:
         self.dataset_doc = dataset_doc
         self.raise_on_agg = raise_on_agg
         self.raise_on_search = raise_on_search
+        # Document version returned by get(); enables optimistic concurrency control.
+        self.seq_no = seq_no
+        self.primary_term = primary_term
+        # Number of index() calls that should raise ConflictError before succeeding.
+        self.conflicts = conflicts
 
         self.indexed = []          # records of index() writes
         self.get_calls = []        # (index, id) tuples
@@ -138,7 +156,12 @@ class FakeElasticsearch:
             return {"_source": self.dataset_doc}
         if self.checkpoint_doc is None:
             raise make_not_found()
-        return {"_source": copy.deepcopy(self.checkpoint_doc)}
+        resp = {"_source": copy.deepcopy(self.checkpoint_doc)}
+        if self.seq_no is not None:
+            resp["_seq_no"] = self.seq_no
+        if self.primary_term is not None:
+            resp["_primary_term"] = self.primary_term
+        return resp
 
     def search(self, index, **kwargs):
         self.search_calls.append(kwargs)
@@ -156,10 +179,25 @@ class FakeElasticsearch:
             hits = []
         return {"hits": {"hits": hits}}
 
-    def index(self, index, id, document):
+    def index(self, index, id, document, **kwargs):
+        if self.conflicts > 0:
+            self.conflicts -= 1
+            # Simulate another writer having advanced the document.
+            if self.seq_no is not None:
+                self.seq_no += 1
+            raise make_conflict()
         self.indexed.append(
-            {"index": index, "id": id, "document": copy.deepcopy(document)}
+            {
+                "index": index,
+                "id": id,
+                "document": copy.deepcopy(document),
+                "kwargs": dict(kwargs),
+            }
         )
+        if self.seq_no is not None:
+            self.seq_no += 1
+            return {"_seq_no": self.seq_no, "_primary_term": self.primary_term}
+        return None
 
 
 @pytest.fixture
@@ -184,11 +222,11 @@ def make_helper(monkeypatch):
         monkeypatch.setattr(
             helper_module, "Elasticsearch", lambda *a, **k: fake_es
         )
-        params = dict(
-            es_host_url="http://localhost:9200",
-            es_index_name="idx",
-            es_api_key="secret-key",
-        )
+        params = {
+            "es_host_url": "http://localhost:9200",
+            "es_index_name": "idx",
+            "es_api_key": "secret-key",
+        }
         params.update(kwargs)
         return PowerScaleHelper(**params)
 

@@ -2,6 +2,7 @@ import copy
 import logging
 import json
 
+from collections.abc import Mapping
 from typing import Iterator, Tuple, Dict, Any, Optional, List
 from pathlib import Path
 
@@ -26,24 +27,30 @@ class PowerScaleHelper:
     * ``input_files`` — monitor a fixed list of specific file paths
       (each must start with ``/ifs``).
 
-    **Checkpointing** — after each successful scan the highest-seen snapshot ID
-    is written back to Elasticsearch (keyed by ``app_name``).  On the next run
+    **Checkpointing** — callers can persist the highest-seen snapshot ID by
+    calling :meth:`save_checkpoint` (keyed by ``app_name``).  On the next run
     only files whose snapshot ID is strictly greater than the saved value are
-    returned, making scans incremental.  A ``force_scan`` / ``snapshot_id=0``
-    call bypasses the checkpoint and returns files from snapshot 1 onwards (i.e.
-    ``metadata.snapshots.s2 > 0``); snapshot 0 files are not returned.
+    returned, making scans incremental.  Passing ``snapshot_id=0`` to the
+    iterators bypasses the checkpoint and returns files from snapshot 1 onwards
+    (i.e. ``metadata.snapshots.s2 > 0``); snapshot 0 files are not returned.
 
     **Key methods:**
 
     * :meth:`get_directory_changes` — primary iterator; yields
-      ``(Path, snapshot, lin, change_types)`` tuples and saves a checkpoint when
-      the generator is exhausted normally.
-    * :meth:`get_new_files` — thin wrapper that filters to ``ENTRY_ADDED`` only.
+      ``(Path, snapshot, lin, change_types)`` tuples. It does **not** advance the
+      checkpoint by default: pass ``save_checkpoint=True`` to write it once the
+      generator is exhausted, or call :meth:`save_checkpoint` yourself after
+      downstream ingestion has succeeded.
+    * :meth:`get_new_files` — thin wrapper that filters to ``ENTRY_ADDED`` only;
+      it also leaves the checkpoint untouched.
     * :meth:`get_all_files` — full-scan iterator returning every file regardless
       of change type.
     * :meth:`build_query` — constructs the Elasticsearch query for the active scope.
     * :meth:`save_checkpoint` / :meth:`get_checkpoint` — explicit checkpoint I/O.
     """
+
+    # Attempts for a checkpoint write that loses an optimistic-concurrency race.
+    __CHECKPOINT_WRITE_ATTEMPTS = 3
 
     def __init__(
         self,
@@ -80,7 +87,11 @@ class PowerScaleHelper:
         self.__verify_ssl = verify_ssl
         self.__latest_snapshot_id = -1
         self.__max_mtime = 0
-        self.__files_seen: Optional[bool] = None
+        self.__files_seen: bool = False  # True after get_directory_changes yields at least one file
+        # Elasticsearch document version of the loaded checkpoint, used for
+        # optimistic concurrency control on write.  None until a checkpoint is read.
+        self.__checkpoint_seq_no: Optional[int] = None
+        self.__checkpoint_primary_term: Optional[int] = None
         self.__app_name = app_name
         self.__app_version = app_version
 
@@ -98,8 +109,15 @@ class PowerScaleHelper:
         if self.__dataset_name is not None and (self.__folder_path is not None or self.__input_files is not None):
             raise ValueError("dataset_name is mutually exclusive with folder_path and input_files; select one only")
 
+        # Normalize folder_path once, before validation, so the checkpoint key, the
+        # Elasticsearch query and the boundary post-filter all agree on one value.
+        if self.__folder_path is not None:
+            self.__normalized_folder = self.__folder_path.strip().rstrip("/")
+        else:
+            self.__normalized_folder = None
+
         # folder_path must be an absolute PowerScale path beginning with /ifs.
-        if self.__folder_path is not None and not self.__folder_path.startswith("/ifs"):
+        if self.__normalized_folder is not None and not self.__normalized_folder.startswith("/ifs"):
             raise ValueError("folder_path must start with '/ifs'")
 
         # Validate the list of input_files if it exists
@@ -111,6 +129,13 @@ class PowerScaleHelper:
             for p in self.__input_files:
                 if not p.startswith("/ifs"):
                     raise ValueError("all input_files must start with '/ifs'")
+
+        # Exact-match set used to post-filter results for the input_files scope.
+        # build_query() uses match_phrase on the analyzed data.path field, which also
+        # matches descendant and adjacent-token paths, so hits must be narrowed here.
+        self.__input_files_set = (
+            set(self.__input_files) if self.__input_files is not None else None
+        )
 
         self.__es = Elasticsearch(
             hosts=self.__es_host_url,
@@ -131,7 +156,7 @@ class PowerScaleHelper:
         elif self.__folder_path is not None:
             self.__checkpoint_root = "folder_paths"
             self.__checkpoint_key = "path"
-            self.__checkpoint_value = self.__folder_path
+            self.__checkpoint_value = self.__normalized_folder  # use normalized path
         elif self.__input_files is not None:
             self.__checkpoint_root = "input_files"
             self.__checkpoint_key = "paths"
@@ -164,10 +189,66 @@ class PowerScaleHelper:
             resp = self.__es.get(index=self.__es_index_name, id=self.__document_name)
             _logger.debug("Checkpoint query response: %s", resp)
             self.__last_state = resp["_source"]
+            # Record the document version for optimistic concurrency control on write.
+            self.__checkpoint_seq_no = resp.get("_seq_no")
+            self.__checkpoint_primary_term = resp.get("_primary_term")
             return True, self.__last_state
         except exceptions.NotFoundError:
             self.__last_state = self.init_checkpoint_doc()
+            self.__checkpoint_seq_no = None
+            self.__checkpoint_primary_term = None
             return False, self.__last_state
+
+    def _scope_matches(self, keydoc: Dict[str, Any]) -> bool:
+        """Return True when a checkpoint entry belongs to this helper's scope.
+
+        For folder scopes, entries written by older versions may carry an
+        unnormalized path (e.g. a trailing slash or surrounding whitespace), so
+        compare on the normalized form to avoid a spurious full re-ingest.
+        """
+        if keydoc.get("version") != self.__app_version:
+            return False
+        stored = keydoc.get(self.__checkpoint_key)
+        if self.__normalized_folder is not None and isinstance(stored, str):
+            return stored.strip().rstrip("/") == self.__normalized_folder
+        return stored == self.__checkpoint_value
+
+    def _in_scope(self, file_path: str) -> bool:
+        """Return True when an Elasticsearch hit really belongs to the active scope.
+
+        Both scope queries run against the *analyzed* ``data.path`` field, so
+        Elasticsearch returns more than the caller asked for:
+
+        * ``folder_path`` uses ``match_phrase_prefix``, so a query for
+          ``/ifs/data/foo`` also matches the sibling ``/ifs/data/foobar``.
+        * ``input_files`` uses ``match_phrase``, so a request for
+          ``/ifs/data/report`` also matches ``/ifs/data/report/inner.txt`` and
+          ``/ifs/data/report.bak``.
+
+        The ``dataset_name`` scope is user-defined and is intentionally not
+        narrowed here.
+        """
+        if self.__normalized_folder is not None:
+            if file_path != self.__normalized_folder and not file_path.startswith(
+                self.__normalized_folder + "/"
+            ):
+                _logger.debug(
+                    "Skipping file outside folder scope: %s (folder: %s)",
+                    file_path,
+                    self.__normalized_folder,
+                )
+                return False
+            return True
+
+        if self.__input_files_set is not None:
+            if file_path not in self.__input_files_set:
+                _logger.debug(
+                    "Skipping file not in requested input_files: %s", file_path
+                )
+                return False
+            return True
+
+        return True
 
     def refresh_dataset(self) -> Dict[str, Any]:
         """Refresh the MetadataIQ dataset configuration from elastic.
@@ -211,11 +292,7 @@ class PowerScaleHelper:
             return -1
 
         for ckpt in checkpoints:
-            # Match both path and version
-            if (
-                ckpt[self.__checkpoint_key] == self.__checkpoint_value
-                and ckpt.get("version") == self.__app_version
-            ):
+            if self._scope_matches(ckpt):
                 return ckpt.get("snapshot", -1)
 
         # not found, return -1
@@ -236,10 +313,7 @@ class PowerScaleHelper:
             return None
 
         for ckpt in checkpoints:
-            if (
-                ckpt[self.__checkpoint_key] == self.__checkpoint_value
-                and ckpt.get("version") == self.__app_version
-            ):
+            if self._scope_matches(ckpt):
                 return ckpt.get("saved_mtime")
 
         return None
@@ -255,46 +329,41 @@ class PowerScaleHelper:
         """
         return {"folder_paths": [], "datasets": [], "input_files": []}
 
-    def save_checkpoint(self) -> None:
-        """Create or Update the last run numbers so future calls know where we last indexed"""
-        if self.__latest_snapshot_id < 0:
-            _logger.warning(
-                "Skipping checkpoint write: latest_snapshot_id is invalid (%d), "
-                "ES may be unavailable",
-                self.__latest_snapshot_id,
-            )
-            return
+    def __build_checkpoint_state(self) -> Tuple[Dict[str, Any], bool]:
+        """Return (candidate state, needs_write) for the current scope.
+
+        Works on a copy of the loaded checkpoint so a skipped write never leaves
+        the in-memory state diverged from what is persisted in Elasticsearch.
+        """
         if self.__last_state is None:
             _logger.debug(
                 "Checkpoint save, no current last_state, creating new save document"
             )
-            self.__last_state = self.init_checkpoint_doc()
+            state = self.init_checkpoint_doc()
         else:
+            state = copy.deepcopy(self.__last_state)
             # Backfill missing root keys so a checkpoint written by an older version
             # (or a different scope sharing the same app_name) can still be appended to.
-            defaults = self.init_checkpoint_doc()
-            for key in defaults:
-                if key not in self.__last_state:
-                    self.__last_state[key] = defaults[key]
+            for key, value in self.init_checkpoint_doc().items():
+                if key not in state:
+                    state[key] = value
 
-        state = self.__last_state
         state_key_found = False
+        state_index = -1
         state_snapshot_id = -1  # use -1 so a brand-new entry always triggers a write
         old_saved_mtime = None
         # Locate the existing checkpoint entry for this scope and version.
         for index, keydoc in enumerate(state[self.__checkpoint_root]):
-            # Match both path and version
-            if (
-                keydoc[self.__checkpoint_key] == self.__checkpoint_value
-                and keydoc.get("version") == self.__app_version
-            ):
+            if self._scope_matches(keydoc):
+                state_index = index
                 state_snapshot_id = keydoc.get("snapshot", -1)
                 old_saved_mtime = keydoc.get("saved_mtime")
                 state_key_found = True
                 break
 
         # Preserve saved_mtime on empty runs to avoid misclassifying modified files as added.
-        if self.__files_seen is not False:
+        # __files_seen is True only after get_directory_changes yields at least one file.
+        if self.__files_seen:
             saved_mtime = self.__max_mtime
         elif state_key_found and old_saved_mtime is not None:
             saved_mtime = old_saved_mtime
@@ -311,12 +380,13 @@ class PowerScaleHelper:
             doc["saved_mtime"] = saved_mtime
 
         if state_key_found:
-            state[self.__checkpoint_root][index] = doc
+            state[self.__checkpoint_root][state_index] = doc
         else:
             # Append a new checkpoint entry for this scope.
             state[self.__checkpoint_root].append(doc)
 
-        if state_snapshot_id >= self.__latest_snapshot_id:
+        needs_write = state_snapshot_id < self.__latest_snapshot_id
+        if not needs_write:
             _logger.debug(
                 "Skipping checkpoint write for %s %s (version %d), latest_snapshot_id = %d, state_snapshot_id=%d",
                 self.__checkpoint_key,
@@ -325,7 +395,24 @@ class PowerScaleHelper:
                 self.__latest_snapshot_id,
                 state_snapshot_id,
             )
-        else:
+        return state, needs_write
+
+    def save_checkpoint(self) -> None:
+        """Create or Update the last run numbers so future calls know where we last indexed"""
+        if self.__latest_snapshot_id < 0:
+            _logger.warning(
+                "Skipping checkpoint write: latest_snapshot_id is invalid (%d), "
+                "ES may be unavailable",
+                self.__latest_snapshot_id,
+            )
+            return
+
+        for attempt in range(1, self.__CHECKPOINT_WRITE_ATTEMPTS + 1):
+            state, needs_write = self.__build_checkpoint_state()
+            if not needs_write:
+                # Nothing was persisted, so leave the in-memory state as loaded.
+                return
+
             _logger.debug(
                 "Updating checkpoint with %s %s (version %d), snapshot_id = %d",
                 self.__checkpoint_key,
@@ -333,12 +420,49 @@ class PowerScaleHelper:
                 self.__app_version,
                 self.__latest_snapshot_id,
             )
-            self.__es.index(
-                index=self.__es_index_name,
-                id=self.__document_name,
-                document=state,
-            )
-        self.__last_state = state
+            # Optimistic concurrency control: fail instead of blindly overwriting a
+            # checkpoint another writer advanced since we loaded it.
+            if self.__checkpoint_seq_no is not None and self.__checkpoint_primary_term is not None:
+                occ = {
+                    "if_seq_no": self.__checkpoint_seq_no,
+                    "if_primary_term": self.__checkpoint_primary_term,
+                }
+            else:
+                # No document was found on load, so require this write to create it.
+                # If a concurrent first run created it meanwhile, this conflicts and
+                # the retry reloads that document instead of overwriting it.
+                occ = {"op_type": "create"}
+            try:
+                resp = self.__es.index(
+                    index=self.__es_index_name,
+                    id=self.__document_name,
+                    document=state,
+                    **occ,
+                )
+            except exceptions.ConflictError:
+                _logger.warning(
+                    "Checkpoint write conflicted with a concurrent writer "
+                    "(attempt %d/%d); reloading checkpoint and retrying",
+                    attempt,
+                    self.__CHECKPOINT_WRITE_ATTEMPTS,
+                )
+                self.get_checkpoint()
+                continue
+            # Track the new document version so a later save in this process still
+            # participates in optimistic concurrency control.
+            if isinstance(resp, Mapping):
+                self.__checkpoint_seq_no = resp.get("_seq_no")
+                self.__checkpoint_primary_term = resp.get("_primary_term")
+            self.__last_state = state
+            return
+
+        _logger.error(
+            "Checkpoint not saved for %s %s: %d concurrent write conflicts. "
+            "The next run will rescan from the last successfully saved snapshot.",
+            self.__checkpoint_key,
+            self.__checkpoint_value,
+            self.__CHECKPOINT_WRITE_ATTEMPTS,
+        )
 
     def es_search_paged(self, query, batch_size=10000) -> Iterator[Dict[str, Any]]:
         """
@@ -403,14 +527,12 @@ class PowerScaleHelper:
                 }
             }
         """
-        if self.__folder_path is not None:
-            # Trim whitespace and trailing slashes. match_phrase_prefix on the
-            # analyzed data.path field may also match sibling directories (e.g.
-            # /ifs/data/foo can match /ifs/data/foobar), so get_directory_changes
-            # applies a post-filter to enforce the requested folder boundary.
-            path = self.__folder_path.strip().rstrip("/")
+        if self.__normalized_folder is not None:
+            # match_phrase_prefix on the analyzed data.path field may also match
+            # sibling directories (e.g. /ifs/data/foo can match /ifs/data/foobar),
+            # so get_directory_changes applies a post-filter to enforce the boundary.
             base_query = {
-                "bool": {"must": [{"match_phrase_prefix": {"data.path": path}}]}
+                "bool": {"must": [{"match_phrase_prefix": {"data.path": self.__normalized_folder}}]}
             }
         elif self.__dataset_name is not None:
             # use dataset definition query; tolerate both string-JSON and dict storage
@@ -432,6 +554,18 @@ class PowerScaleHelper:
                 # bool.must may be a single dict in valid ES DSL; normalize to a list.
                 if "must" in base_query["bool"] and not isinstance(base_query["bool"]["must"], list):
                     base_query["bool"]["must"] = [base_query["bool"]["must"]]
+                # Elasticsearch defaults minimum_should_match to 1 only while a bool
+                # query has no must/filter clauses.  The connector appends must
+                # clauses below, which would silently flip that default to 0 and turn
+                # a should-only dataset filter into a no-op, so pin it to 1 here.
+                bool_clause = base_query["bool"]
+                if (
+                    bool_clause.get("should")
+                    and "minimum_should_match" not in bool_clause
+                    and not bool_clause.get("must")
+                    and not bool_clause.get("filter")
+                ):
+                    bool_clause["minimum_should_match"] = 1
             else:
                 clauses = user_query if isinstance(user_query, list) else [user_query]
                 base_query = {"bool": {"must": clauses}}
@@ -491,16 +625,16 @@ class PowerScaleHelper:
         return self.es_search_paged(query=query)
 
     def get_directory_changes(
-        self, snapshot_id: int = -1, save_checkpoint: bool = True
+        self, snapshot_id: int = -1, save_checkpoint: bool = False
     ) -> Iterator[Tuple[Path, int, int, List[str]]]:
         """Return iterator of tuples of (Path, snapshot, lin, change_types) for files in the current path
 
         Args:
             snapshot_id: snapshot to start from; negative means use the saved checkpoint.
-            save_checkpoint: when True (default) the checkpoint is written once the
-                generator is exhausted. Callers that need to perform additional work
-                (such as parsing documents) before the checkpoint should be committed
-                can set this to False and call :meth:`save_checkpoint` themselves.
+            save_checkpoint: when True, the checkpoint is written once the generator
+                is exhausted. When False (default), callers must call :meth:`save_checkpoint`
+                themselves after downstream work completes. Most loaders/readers pass False
+                and checkpoint after parsing succeeds.
 
         Returns:
             Iterator yielding tuples containing:
@@ -511,8 +645,11 @@ class PowerScaleHelper:
         """
         search_success = False
         try:
-            # First run occurs only with the default snapshot_id and no prior checkpoint.
-            is_first_run = snapshot_id < 0 and self.get_snapshot_id() < 0
+            # A missing checkpoint means nothing has been ingested yet, so this is a
+            # first run regardless of the requested start snapshot. Relying on the
+            # checkpoint alone keeps force_scan (snapshot_id=0) on a fresh checkpoint
+            # consistent with a normal first run.
+            is_first_run = self.get_snapshot_id() < 0
             raw_saved_mtime = self._get_saved_mtime_optional()
             saved_mtime = raw_saved_mtime if raw_saved_mtime is not None else 0
             self.__max_mtime = saved_mtime  # preserve previous value if scan returns no results
@@ -521,18 +658,10 @@ class PowerScaleHelper:
                 _logger.debug("ES returned the following document: %s", document)
                 file_path = document["_source"]["data"]["path"]
 
-                # match_phrase_prefix treats the last path token as a prefix, so a
-                # query for /ifs/data/foo also matches /ifs/data/foobar. Filter hits
-                # to files that are actually inside the requested folder.
-                if self.__folder_path is not None:
-                    normalized_folder = self.__folder_path.strip().rstrip("/")
-                    if file_path != normalized_folder and not file_path.startswith(normalized_folder + "/"):
-                        _logger.debug(
-                            "Skipping file outside folder scope: %s (folder: %s)",
-                            file_path, normalized_folder
-                        )
-                        continue
-                
+                # Narrow analyzed-field over-matches down to the requested scope.
+                if not self._in_scope(file_path):
+                    continue
+
                 snapshot = int(document["_source"]["metadata"]["snapshots"]["s2"])
                 lin = int(document["_source"]["data"]["lin"])
                 change_types = document["_source"]["data"].get("change_types") or []
@@ -570,13 +699,16 @@ class PowerScaleHelper:
     def get_new_files(self, snapshot_id: int = -1) -> Iterator[Tuple[Path, int, int]]:
         """Return iterator of only files that were added
 
+        The checkpoint is not advanced; call :meth:`save_checkpoint` after
+        downstream ingestion succeeds.
+
         Args:
             snapshot_id: snapshot ID to start from. If negative, uses last checkpoint.
 
         Returns:
             Iterator of (Path, snapshot, lin) tuples for added files
         """
-        for path, snapshot, lin, change_types in self.get_directory_changes(snapshot_id):
+        for path, snapshot, lin, change_types in self.get_directory_changes(snapshot_id, save_checkpoint=False):
             if "ENTRY_ADDED" in change_types:
                 yield path, snapshot, lin
 
@@ -603,11 +735,9 @@ class PowerScaleHelper:
         for document in self.match_files_by_snapshot(snapshot_id=0):
             file_path = document["_source"]["data"]["path"]
 
-            # Apply folder boundary filter (same as get_directory_changes)
-            if self.__folder_path is not None:
-                normalized_folder = self.__folder_path.strip().rstrip("/")
-                if file_path != normalized_folder and not file_path.startswith(normalized_folder + "/"):
-                    continue
+            # Apply the same scope boundary filter as get_directory_changes.
+            if not self._in_scope(file_path):
+                continue
 
             snapshot = int(document["_source"]["metadata"]["snapshots"]["s2"])
             lin = int(document["_source"]["data"]["lin"])

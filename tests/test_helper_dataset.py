@@ -106,7 +106,7 @@ def test_dataset_checkpoint_saved_under_datasets_key(make_helper):
     pages = [[make_hit("/ifs/data/a.txt", lin=1, snapshot=7)]]
     fake = _dataset_fake(search_pages=pages, max_snapid=7)
     helper = make_helper(fake, dataset_name="ds_alpha")
-    list(helper.get_directory_changes())
+    list(helper.get_directory_changes(save_checkpoint=True))
     assert len(fake.indexed) == 1
     written = fake.indexed[0]["document"]
     assert "datasets" in written

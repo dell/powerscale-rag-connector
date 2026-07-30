@@ -225,6 +225,7 @@ def test_build_query_no_scope_raises(make_helper):
     helper = make_helper(FakeElasticsearch(), folder_path="/ifs/data")
     # simulate a misconfigured helper with no active scope
     helper._PowerScaleHelper__folder_path = None
+    helper._PowerScaleHelper__normalized_folder = None  # also clear normalized version
     helper._PowerScaleHelper__dataset_name = None
     helper._PowerScaleHelper__input_files = None
     with pytest.raises(ValueError, match="no scope configured"):

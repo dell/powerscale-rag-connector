@@ -98,8 +98,9 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
             raise ValueError("input_files cannot be empty")
         if norm_input_dir and not norm_input_dir.startswith("/ifs"):
             raise ValueError("input_dir must start with '/ifs'")
-        if norm_input_dir and not self.fs.isdir(norm_input_dir):
-            raise ValueError(f"Directory does not exist: {norm_input_dir}")
+        # Deliberately no filesystem existence check on input_dir: file discovery is
+        # delegated to MetadataIQ, and the connector must work from hosts where /ifs
+        # is not mounted. Missing paths surface as parse errors, gated by raise_on_error.
         if norm_input_files:
             for p in norm_input_files:
                 if not p.startswith("/ifs"):
@@ -475,3 +476,13 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
         meta = dict(user_meta)
         meta.update({"source": path_str, "snapshot": snapshot, "lin": lin, "change_types": changes})
         return meta
+
+    def save_checkpoint(self) -> None:
+        """Persist the checkpoint after downstream ingestion has succeeded.
+
+        Note: ``load_data()``, ``iter_data()``, and ``lazy_load_data()`` already
+        commit the checkpoint when the generator is exhausted.  Calling this
+        method explicitly is safe but typically unnecessary unless you break out
+        of the generator early and still want to advance the checkpoint.
+        """
+        self.__helper.save_checkpoint()

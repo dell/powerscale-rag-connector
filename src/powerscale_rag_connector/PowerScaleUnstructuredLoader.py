@@ -7,21 +7,26 @@ metadata (``source``, ``snapshot``, ``lin``, ``change_types``).
 """
 
 import logging
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 from langchain_core.documents import Document
-from langchain_core.document_loaders import BaseLoader
 from langchain_unstructured import UnstructuredLoader
+
 from .PowerScalePathLoader import PowerScalePathLoader
 
 _logger = logging.getLogger(__name__)
 
 
-class PowerScaleUnstructuredLoader(BaseLoader):
+class PowerScaleUnstructuredLoader(UnstructuredLoader):
     """PowerScale LangChain UnstructuredLoader.
 
-    Loads files via LangChain's ``UnstructuredLoader``, leveraging
-    PowerScale MetadataIQ to efficiently find files that have changed.
+    Subclasses ``langchain_unstructured.UnstructuredLoader`` so every partition
+    option of the upstream loader remains available, while PowerScale MetadataIQ
+    supplies the set of files to parse instead of a caller-provided path.
+
+    ``file_path`` is reassigned for each discovered file before delegating to
+    ``UnstructuredLoader.lazy_load()``.  A single instance is therefore not safe
+    to iterate from two threads at once.
     """
 
     def __init__(
@@ -37,14 +42,15 @@ class PowerScaleUnstructuredLoader(BaseLoader):
         verify_ssl: bool = True,
         app_name: str = "powerscale_rag_connector",
         app_version: int = 1,
+        **unstructured_kwargs: Any,
     ) -> None:
         """Initialize the loader with a folder path or dataset name.
 
         PowerScale-specific parameters define the Elasticsearch scope and
-        checkpointing behavior.  ``chunking_strategy`` is optional and inherited
-        from ``langchain_unstructured.UnstructuredLoader``; it controls how the
-        underlying loader splits each file.  ``raise_on_error`` is a
-        PowerScale-specific safety switch.
+        checkpointing behavior.  Any additional keyword arguments are forwarded
+        verbatim to ``langchain_unstructured.UnstructuredLoader`` (for example
+        ``partition_via_api``, ``api_key``, ``url``, ``post_processors``, or any
+        ``unstructured`` partition option such as ``languages``).
 
         Args:
             es_host_url: URI of the Elasticsearch database incl. port (e.g. http://localhost:9200)
@@ -60,38 +66,37 @@ class PowerScaleUnstructuredLoader(BaseLoader):
             verify_ssl: Whether to verify SSL certificates for Elasticsearch connection. Defaults to True.
             app_name: A unique application name to use for the checkpoint document. Defaults to "powerscale_rag_connector".
             app_version: A version number for the checkpoint document. Defaults to 1.
+            **unstructured_kwargs: (Optional; inherited) Extra arguments forwarded to ``UnstructuredLoader``.
         """
-        self.__folder_path = folder_path
-        self.__dataset_name = dataset_name
-        self.__chunking_strategy = chunking_strategy
-        self.__force_scan = force_scan
+        if chunking_strategy is not None:
+            unstructured_kwargs["chunking_strategy"] = chunking_strategy
+
+        # file_path is supplied per file in lazy_load(); the Unstructured client and
+        # partition options are built once here instead of once per file.
+        super().__init__(file_path=None, **unstructured_kwargs)
+
         self.__raise_on_error = raise_on_error
-        self.__verify_ssl = verify_ssl
-        self.__app_name = app_name
-        self.__app_version = app_version
 
         self.path_loader = PowerScalePathLoader(
             es_host_url=es_host_url,
             es_index_name=es_index_name,
             es_api_key=es_api_key,
-            folder_path=self.__folder_path,
-            dataset_name=self.__dataset_name,
-            force_scan=self.__force_scan,
-            verify_ssl=self.__verify_ssl,
-            app_name=self.__app_name,
-            app_version=self.__app_version,
+            folder_path=folder_path,
+            dataset_name=dataset_name,
+            force_scan=force_scan,
+            verify_ssl=verify_ssl,
+            app_name=app_name,
+            app_version=app_version,
         )
 
     def lazy_load(self) -> Iterator[Document]:
-        """Lazy load documents from the file path."""
+        """Yield Documents for every file PowerScale reports as changed."""
         for file_path, snapshot, lin, change_types in self.path_loader.lazy_load():
+            # Point the inherited loader at the current file.
+            self.file_path = str(file_path)
             try:
-                loader_kwargs = {}
-                if self.__chunking_strategy is not None:
-                    loader_kwargs["chunking_strategy"] = self.__chunking_strategy
-                loader = UnstructuredLoader(file_path=str(file_path), **loader_kwargs)
-                for doc in loader.lazy_load():
-                    # ensure the source is set correctly
+                for doc in super().lazy_load():
+                    # PowerScale fields are authoritative, so they are written last.
                     doc.metadata["source"] = str(file_path)
                     doc.metadata["snapshot"] = snapshot
                     doc.metadata["lin"] = lin
@@ -103,4 +108,14 @@ class PowerScaleUnstructuredLoader(BaseLoader):
                 if self.__raise_on_error:
                     raise
         # Only commit the checkpoint once all files have been processed.
+        self.path_loader.save_checkpoint()
+
+    def save_checkpoint(self) -> None:
+        """Persist the checkpoint after downstream ingestion has succeeded.
+
+        Note: ``lazy_load()`` already commits the checkpoint when the generator
+        is exhausted.  Calling this method explicitly is safe but typically
+        unnecessary unless you break out of the generator early and still want
+        to advance the checkpoint.
+        """
         self.path_loader.save_checkpoint()

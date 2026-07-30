@@ -114,18 +114,14 @@ def test_simple_directory_reader_fs_parameter_accepted(monkeypatch):
 def test_unstructured_loader_raise_on_error_true_raises(monkeypatch):
     """Test that raise_on_error=True re-raises parse errors."""
     pytest.importorskip("langchain_unstructured")
+    from langchain_unstructured import UnstructuredLoader
     from powerscale_rag_connector import PowerScaleUnstructuredLoader
-    import importlib
-    mod = importlib.import_module("powerscale_rag_connector.PowerScaleUnstructuredLoader")
 
-    class ExplodingLoader:
-        def __init__(self, file_path=None, **kwargs):
-            pass
+    def exploding_lazy_load(self):
+        raise RuntimeError("parse failed")
+        yield  # pragma: no cover - keeps this a generator function
 
-        def lazy_load(self):
-            raise RuntimeError("parse failed")
-
-    monkeypatch.setattr(mod, "UnstructuredLoader", ExplodingLoader)
+    monkeypatch.setattr(UnstructuredLoader, "lazy_load", exploding_lazy_load)
 
     loader = PowerScaleUnstructuredLoader(
         es_host_url="h",
@@ -157,9 +153,8 @@ def test_unstructured_reader_raise_on_error_true_raises(monkeypatch):
     """Test that raise_on_error=True re-raises parse errors."""
     pytest.importorskip("llama_index.core")
     pytest.importorskip("llama_index.readers.file")
+    from llama_index.readers.file import UnstructuredReader
     from powerscale_rag_connector import PowerScaleUnstructuredReader
-    import importlib
-    mod = importlib.import_module("powerscale_rag_connector.PowerScaleUnstructuredReader")
 
     reader = PowerScaleUnstructuredReader(
         es_host_url="h",
@@ -169,11 +164,10 @@ def test_unstructured_reader_raise_on_error_true_raises(monkeypatch):
         raise_on_error=True,
     )
 
-    class ExplodingReader:
-        def load_data(self, **kwargs):
-            raise RuntimeError("parse failed")
+    def exploding_load_data(self, **kwargs):
+        raise RuntimeError("parse failed")
 
-    monkeypatch.setattr(mod, "UnstructuredReader", ExplodingReader)
+    monkeypatch.setattr(UnstructuredReader, "load_data", exploding_load_data)
 
     class FakePathLoader:
         def lazy_load(self):
@@ -216,28 +210,38 @@ def test_simple_directory_reader_init_does_not_perform_local_walk(monkeypatch):
     assert reader.input_files == []
 
 
-def test_simple_directory_reader_fs_used_for_validation(monkeypatch):
-    """Test that fs is used for existence checks during initialization."""
+def test_simple_directory_reader_does_not_probe_fs_during_init(monkeypatch):
+    """Initialization must not probe the filesystem for input_dir existence.
+
+    Existence validation is the caller's responsibility: MetadataIQ owns file
+    discovery and /ifs may not be mounted on the ingesting host.
+    """
     pytest.importorskip("llama_index.core")
     from llama_index.core import SimpleDirectoryReader
     from powerscale_rag_connector import PowerScaleSimpleDirectoryReader
 
     monkeypatch.setattr(SimpleDirectoryReader, "__init__", lambda self, **kw: None)
 
-    class FakeFS:
+    calls = []
+
+    class RecordingFS:
         def isdir(self, p):
-            return False  # Simulate directory not existing
+            calls.append(("isdir", p))
+            return False
 
         def isfile(self, p):
-            return True
+            calls.append(("isfile", p))
+            return False
 
-    fake_fs = FakeFS()
+    fake_fs = RecordingFS()
 
-    with pytest.raises(ValueError, match="Directory does not exist"):
-        PowerScaleSimpleDirectoryReader(
-            es_host_url="h",
-            es_index_name="i",
-            es_api_key="k",
-            input_dir="/ifs/data",
-            fs=fake_fs,
-        )
+    reader = PowerScaleSimpleDirectoryReader(
+        es_host_url="h",
+        es_index_name="i",
+        es_api_key="k",
+        input_dir="/ifs/data",
+        fs=fake_fs,
+    )
+
+    assert reader.fs is fake_fs
+    assert calls == [], f"filesystem was probed during init: {calls}"
