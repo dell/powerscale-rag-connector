@@ -469,20 +469,22 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
             except Exception as e:
                 _logger.warning("file_metadata failed for %s: %s", path_str, e)
 
-        snapshot, lin, changes = selected[os.path.normpath(path_str)]
+        key = os.path.normpath(path_str)
+        entry = selected.get(key)
+        if entry is None:
+            _logger.warning(
+                "_merge_metadata: path %s (normalized: %s) not in selected files; "
+                "PowerScale metadata will be missing",
+                path_str,
+                key,
+            )
+            meta = dict(user_meta)
+            meta["source"] = path_str
+            return meta
+        snapshot, lin, changes = entry
         # Start with user-provided keys, then overwrite with PowerScale fields so
         # structural values like `lin` (used for vectorstore deduplication) and
         # `snapshot` (used for checkpointing) are always authoritative.
         meta = dict(user_meta)
         meta.update({"source": path_str, "snapshot": snapshot, "lin": lin, "change_types": changes})
         return meta
-
-    def save_checkpoint(self) -> None:
-        """Persist the checkpoint after downstream ingestion has succeeded.
-
-        Note: ``load_data()``, ``iter_data()``, and ``lazy_load_data()`` already
-        commit the checkpoint when the generator is exhausted.  Calling this
-        method explicitly is safe but typically unnecessary unless you break out
-        of the generator early and still want to advance the checkpoint.
-        """
-        self.__helper.save_checkpoint()

@@ -107,15 +107,3 @@ class PowerScaleUnstructuredLoader(UnstructuredLoader):
                 _logger.error("Error loading file %s: %s", file_path, e)
                 if self.__raise_on_error:
                     raise
-        # Only commit the checkpoint once all files have been processed.
-        self.path_loader.save_checkpoint()
-
-    def save_checkpoint(self) -> None:
-        """Persist the checkpoint after downstream ingestion has succeeded.
-
-        Note: ``lazy_load()`` already commits the checkpoint when the generator
-        is exhausted.  Calling this method explicitly is safe but typically
-        unnecessary unless you break out of the generator early and still want
-        to advance the checkpoint.
-        """
-        self.path_loader.save_checkpoint()

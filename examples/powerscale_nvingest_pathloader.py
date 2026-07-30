@@ -125,9 +125,7 @@ def main():
 
         # Process each file
         # IMPORTANT: Errors during processing will abort the loop and prevent checkpoint
-        # advancement. The loader will retry failed files on the next run. If you want to
-        # skip errors and advance the checkpoint anyway, wrap this loop in try/except and
-        # consume the entire generator even when errors occur.
+        # advancement. The loader will retry failed files on the next run.
         for file_tuple in loader.lazy_load():
             filepath, _snapshot, _lin, _change_types = file_tuple
             file_count += 1
@@ -137,11 +135,11 @@ def main():
                 success_count += 1
             else:
                 error_count += 1
-                logger.error("Ingestion failed for %s - aborting to prevent checkpoint advancement", filepath)
+                logger.error(
+                    "Ingestion failed for %s - aborting to prevent checkpoint advancement",
+                    filepath,
+                )
                 raise RuntimeError(f"NvIngest failed for {filepath}")
-
-        # Only advance the checkpoint after all files were ingested successfully.
-        loader.save_checkpoint()
 
         # Calculate and log statistics
         elapsed_time = time.time() - start_time

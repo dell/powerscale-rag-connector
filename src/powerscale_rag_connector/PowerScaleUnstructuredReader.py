@@ -121,9 +121,7 @@ class PowerScaleUnstructuredReader(UnstructuredReader):
         return list(self.lazy_load_data())
 
     def lazy_load_data(self) -> Iterator[Document]:
-        """
-        Lazily yield LlamaIndex Documents from files discovered by PowerScalePathLoader.
-        """
+        """Lazily yield LlamaIndex Documents from files discovered by PowerScalePathLoader."""
         for file_path, snapshot, lin, change_types in self.path_loader.lazy_load():
             try:
                 # Suppress LlamaIndex doc_id deprecation warning emitted during load;
@@ -148,15 +146,3 @@ class PowerScaleUnstructuredReader(UnstructuredReader):
                               file_path, snapshot, change_types, e)
                 if self.__raise_on_error:
                     raise
-        # Only commit the checkpoint once all files have been processed.
-        self.path_loader.save_checkpoint()
-
-    def save_checkpoint(self) -> None:
-        """Persist the checkpoint after downstream ingestion has succeeded.
-
-        Note: ``load_data()`` and ``lazy_load_data()`` already commit the
-        checkpoint when the generator is exhausted.  Calling this method
-        explicitly is safe but typically unnecessary unless you break out of
-        the generator early and still want to advance the checkpoint.
-        """
-        self.path_loader.save_checkpoint()

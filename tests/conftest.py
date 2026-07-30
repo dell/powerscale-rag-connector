@@ -34,10 +34,10 @@ _OPTIONAL_DEPS = [
 
 def pytest_addoption(parser):
     parser.addoption(
-        "--no-install-extras",
+        "--install-extras",
         action="store_true",
         default=False,
-        help="Do not auto-install optional test dependencies at session start.",
+        help="Auto-install optional framework dependencies (langchain, llama-index, unstructured) at session start.",
     )
 
 
@@ -49,8 +49,8 @@ def _module_available(module_name: str) -> bool:
 
 
 def pytest_sessionstart(session):
-    """Install optional test dependencies if they are missing and not disabled."""
-    if session.config.getoption("--no-install-extras", default=False):
+    """Install optional test dependencies if --install-extras was passed."""
+    if not session.config.getoption("--install-extras", default=False):
         return
 
     missing = [

@@ -81,9 +81,6 @@ def main():
             # In a real application, you would do something with the document here
             # For example, process the document content or add it to a vector store
 
-        # Only advance the checkpoint if all documents were processed successfully.
-        loader.save_checkpoint()
-
         # Calculate and log statistics
         elapsed_time = time.time() - start_time
         docs_per_second = doc_count / elapsed_time if elapsed_time > 0 else 0

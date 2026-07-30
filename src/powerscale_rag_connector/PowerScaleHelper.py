@@ -625,16 +625,15 @@ class PowerScaleHelper:
         return self.es_search_paged(query=query)
 
     def get_directory_changes(
-        self, snapshot_id: int = -1, save_checkpoint: bool = False
+        self, snapshot_id: int = -1, save_checkpoint: bool = True
     ) -> Iterator[Tuple[Path, int, int, List[str]]]:
         """Return iterator of tuples of (Path, snapshot, lin, change_types) for files in the current path
 
         Args:
             snapshot_id: snapshot to start from; negative means use the saved checkpoint.
-            save_checkpoint: when True, the checkpoint is written once the generator
-                is exhausted. When False (default), callers must call :meth:`save_checkpoint`
-                themselves after downstream work completes. Most loaders/readers pass False
-                and checkpoint after parsing succeeds.
+            save_checkpoint: when True (default), the checkpoint is written once the
+                generator is fully exhausted. Set to False to defer the write and call
+                :meth:`save_checkpoint` manually after downstream work completes.
 
         Returns:
             Iterator yielding tuples containing:
@@ -699,8 +698,7 @@ class PowerScaleHelper:
     def get_new_files(self, snapshot_id: int = -1) -> Iterator[Tuple[Path, int, int]]:
         """Return iterator of only files that were added
 
-        The checkpoint is not advanced; call :meth:`save_checkpoint` after
-        downstream ingestion succeeds.
+        The checkpoint is advanced when the generator is fully exhausted.
 
         Args:
             snapshot_id: snapshot ID to start from. If negative, uses last checkpoint.
@@ -708,7 +706,7 @@ class PowerScaleHelper:
         Returns:
             Iterator of (Path, snapshot, lin) tuples for added files
         """
-        for path, snapshot, lin, change_types in self.get_directory_changes(snapshot_id, save_checkpoint=False):
+        for path, snapshot, lin, change_types in self.get_directory_changes(snapshot_id):
             if "ENTRY_ADDED" in change_types:
                 yield path, snapshot, lin
 

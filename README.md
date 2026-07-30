@@ -87,9 +87,7 @@ loader = PowerScaleDocumentLoader(
 
 for doc in loader.lazy_load():
     print(doc.metadata["source"], doc.metadata["change_types"])
-
-# Persist checkpoint so the next run only sees new changes
-loader.save_checkpoint()
+# Checkpoint is saved automatically when the loop completes.
 ```
 
 Each returned `Document` includes `source`, `snapshot`, `lin`, and `change_types` in its metadata.
@@ -109,9 +107,7 @@ for doc in loader.lazy_load():
 
     chunks = process_document(source)  # your chunking/embedding logic
     vectorstore.add(chunks, metadata={"lin": lin, "source": source})
-
-# Persist checkpoint so the next run only sees new changes
-loader.save_checkpoint()
+# Checkpoint is saved automatically when the loop completes.
 ```
 
 > **Note on deleted files:** MetadataIQ does not emit `ENTRY_DELETED` events in the current OneFS firmware version. `get_deleted_files()` raises `NotImplementedError` accordingly. To handle deletes, you must track `lin` values in your own application layer and detect when a previously-seen `lin` stops appearing in results.
@@ -137,8 +133,7 @@ loader = PowerScaleUnstructuredLoader(
 
 for doc in loader.lazy_load():
     print(doc.metadata["source"], doc.page_content[:80])
-
-loader.save_checkpoint()
+# Checkpoint is saved automatically when the loop completes.
 ```
 
 Any additional keyword arguments are forwarded to `UnstructuredLoader`, so upstream
@@ -180,8 +175,7 @@ reader = PowerScaleSimpleDirectoryReader(
 
 for doc in reader.lazy_load_data():
     print(doc.metadata["source"], doc.metadata["change_types"])
-
-reader.save_checkpoint()
+# Checkpoint is saved automatically when the loop completes.
 ```
 
 **`PowerScaleUnstructuredReader`** **subclasses** LlamaIndex's `UnstructuredReader` for element-level parsing:
@@ -199,7 +193,7 @@ reader = PowerScaleUnstructuredReader(
 )
 
 documents = reader.load_data()
-reader.save_checkpoint()
+# Checkpoint is saved automatically after load_data() returns.
 ```
 
 Because it subclasses `UnstructuredReader`, the upstream single-file contract still
@@ -217,10 +211,7 @@ documents = reader.load_data(file=Path("/ifs/data/report.pdf"))
 
 All loaders/readers that parse file content share a PowerScale-specific `raise_on_error` switch. The default is `False` for all of them:
 
-- `PowerScaleUnstructuredLoader` / `PowerScaleUnstructuredReader`: `raise_on_error` (default `False`). If a file fails to parse, the error is logged and processing continues with the next file. The checkpoint advances at the end of the run, meaning failed files are not retried. Set it to `True` to re-raise the exception and stop ingestion; the checkpoint will not be advanced.
-- `PowerScaleSimpleDirectoryReader`: `raise_on_error` (default `False`). Parse errors are logged and skipped; the checkpoint advances at the end of the run. Set it to `True` to re-raise parse errors and prevent checkpoint advancement, so the run can be retried.
-
-When `raise_on_error` is `False` (default), failed files are logged and skipped, and the checkpoint advances at the end of the run, meaning failed files are not retried. When `raise_on_error` is `True`, the checkpoint is only advanced after all selected files have been successfully processed.
+- `raise_on_error` (default `False`): If a file fails to parse, the error is logged and processing continues with the next file. The checkpoint advances automatically when the scan completes, meaning failed files are not retried on the next run. Set to `True` to re-raise the exception and stop the scan; the checkpoint will not advance, so the next run will retry the same set of files.
 
 ### Using as a Standalone Path Loader
 
@@ -238,9 +229,7 @@ loader = PowerScalePathLoader(
 # Get changed files
 for path_info in loader.lazy_load():
     print(path_info)  # (Path, snapshot, lin, change_types)
-
-# Persist checkpoint so the next run only sees new changes
-loader.save_checkpoint()
+# Checkpoint is saved automatically when the loop completes.
 ```
 
 ## Examples

@@ -78,8 +78,8 @@ class PowerScalePathLoader:
         Lazy load only new files on current path using MetadataIQ metadata.
         Yields files one at a time via search_after pagination.
 
-        Checkpoint advancement is deferred; call :meth:`save_checkpoint` after
-        downstream ingestion succeeds.
+        The checkpoint is advanced automatically when the generator is fully
+        exhausted.
 
         Returns:
             Iterator yielding tuples containing:
@@ -90,10 +90,10 @@ class PowerScalePathLoader:
         """
         if self.__force_scan:
             # When force scanning, use get_directory_changes with snapshot_id=0
-            file_generator = self.__helper.get_directory_changes(snapshot_id=0, save_checkpoint=False)
+            file_generator = self.__helper.get_directory_changes(snapshot_id=0)
         else:
             # For normal operation, use get_directory_changes with default snapshot_id
-            file_generator = self.__helper.get_directory_changes(save_checkpoint=False)
+            file_generator = self.__helper.get_directory_changes()
 
         for index, file_tuple in enumerate(file_generator, start=1):
             filepath, snapshot, lin, change_types = file_tuple
@@ -105,7 +105,3 @@ class PowerScalePathLoader:
                 change_types,
             )
             yield file_tuple
-
-    def save_checkpoint(self) -> None:
-        """Persist the checkpoint after downstream ingestion has succeeded."""
-        self.__helper.save_checkpoint()

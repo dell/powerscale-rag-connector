@@ -76,15 +76,11 @@ class PowerScaleDocumentLoader(BaseLoader):
         return self.__pshelper
 
     def lazy_load(self) -> Iterator[Document]:
-        """Lazy load new files on current path using MetadataIQ metadata.
-
-        Checkpoint advancement is deferred; call :meth:`save_checkpoint` after
-        downstream ingestion succeeds.
-        """
+        """Lazy load new files on current path using MetadataIQ metadata."""
         if self.__force_scan:
-            file_generator = self.__helper.get_directory_changes(snapshot_id=0, save_checkpoint=False)
+            file_generator = self.__helper.get_directory_changes(snapshot_id=0)
         else:
-            file_generator = self.__helper.get_directory_changes(save_checkpoint=False)
+            file_generator = self.__helper.get_directory_changes()
 
         for file, snapshot, lin, change_types in file_generator:
             metadata = {
@@ -100,7 +96,3 @@ class PowerScaleDocumentLoader(BaseLoader):
                 metadata["change_types"],
             )
             yield Document(page_content="", metadata=metadata)
-
-    def save_checkpoint(self) -> None:
-        """Persist the checkpoint after downstream ingestion has succeeded."""
-        self.__helper.save_checkpoint()

@@ -197,9 +197,7 @@ def process_changed_files() -> None:
     file_count = success_count = error_count = 0
 
     # IMPORTANT: Errors during processing will abort the loop and prevent checkpoint
-    # advancement. The checkpoint is only committed after all files are processed
-    # successfully by calling loader.save_checkpoint(). If you want to skip errors and
-    # advance the checkpoint anyway, consume the entire generator and call save_checkpoint().
+    # advancement. The checkpoint is committed once the generator is fully consumed.
     for document in loader.lazy_load():
         file_count += 1
         filepath = Path(document.metadata.get("source", ""))
@@ -226,8 +224,6 @@ def process_changed_files() -> None:
             error_count += 1
             raise RuntimeError(f"Vector store add failed for {filepath}")
 
-    # Only advance the checkpoint after all files have been ingested successfully.
-    loader.save_checkpoint()
     logger.info("Processing complete: %d files, %d successful, %d errors", file_count, success_count, error_count)
 
 

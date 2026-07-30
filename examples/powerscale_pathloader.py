@@ -79,9 +79,6 @@ def main():
             )
             # In a real application, you would do something with the file here
 
-        # Only advance the checkpoint after all files were processed successfully.
-        loader.save_checkpoint()
-
         # Calculate and log statistics
         elapsed_time = time.time() - start_time
         files_per_second = file_count / elapsed_time if elapsed_time > 0 else 0

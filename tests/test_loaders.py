@@ -107,27 +107,31 @@ def test_document_loader_force_scan_uses_zero():
     assert fake.calls == [0]
 
 
-def test_document_loader_does_not_save_checkpoint_until_downstream_succeeds():
-    """If a downstream ingestion step fails after consuming all documents, the
-    checkpoint must not have been advanced.
-    """
+class _SavingFakeHelper:
+    """Fake that records save_checkpoint calls from get_directory_changes."""
+
+    def __init__(self, tuples):
+        self.tuples = list(tuples)
+        self.calls = []
+        self.save_calls = []
+
+    def get_directory_changes(self, snapshot_id=-1, save_checkpoint=True):
+        self.calls.append((snapshot_id, save_checkpoint))
+        for t in self.tuples:
+            yield t
+        if save_checkpoint:
+            self.save_calls.append(True)
+
+    def save_checkpoint(self):
+        self.save_calls.append("explicit")
+
+
+def test_document_loader_auto_commits_checkpoint_on_full_consumption():
+    """Checkpoint is saved automatically when lazy_load() is fully consumed."""
     pytest.importorskip("langchain_core")
     from powerscale_rag_connector import PowerScaleDocumentLoader
 
-    class SavingFakeHelper:
-        def __init__(self, tuples):
-            self.tuples = list(tuples)
-            self.calls = []
-            self.save_calls = []
-
-        def get_directory_changes(self, snapshot_id=-1, save_checkpoint=True):
-            self.calls.append((snapshot_id, save_checkpoint))
-            for t in self.tuples:
-                yield t
-            if save_checkpoint:
-                self.save_calls.append(True)
-
-    fake = SavingFakeHelper(TUPLES)
+    fake = _SavingFakeHelper(TUPLES)
     loader = PowerScaleDocumentLoader(
         es_host_url="http://localhost:9200",
         es_index_name="idx",
@@ -136,13 +140,26 @@ def test_document_loader_does_not_save_checkpoint_until_downstream_succeeds():
     )
     loader._PowerScaleDocumentLoader__pshelper = fake
 
-    # Simulate an ingestion pipeline that consumes all docs then fails.
-    try:
-        docs = list(loader.lazy_load())
-        if docs:
-            raise RuntimeError("ingest failed after consumption")
-    except RuntimeError:
-        pass
+    docs = list(loader.lazy_load())
+    assert len(docs) == 2
+    assert fake.save_calls == [True]
 
-    # The helper should not have saved the checkpoint because downstream ingestion failed.
+
+def test_document_loader_does_not_save_checkpoint_on_early_break():
+    """If the caller breaks out of the generator, the checkpoint must not advance."""
+    pytest.importorskip("langchain_core")
+    from powerscale_rag_connector import PowerScaleDocumentLoader
+
+    fake = _SavingFakeHelper(TUPLES)
+    loader = PowerScaleDocumentLoader(
+        es_host_url="http://localhost:9200",
+        es_index_name="idx",
+        es_api_key="key",
+        folder_path="/ifs/data",
+    )
+    loader._PowerScaleDocumentLoader__pshelper = fake
+
+    for doc in loader.lazy_load():
+        break  # consume only the first document
+
     assert fake.save_calls == []
