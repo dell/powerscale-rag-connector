@@ -4,20 +4,19 @@ build-backend = "hatchling.build"
 
 [project]
 name = "powerscale-rag-connector"
-version = "1.0.9"
+version = "2.0.0"
 dependencies = [
-  "elasticsearch",
-  "langchain_core",
-  "langchain_community"
+  "elasticsearch>=8,<9"
 ]
 authors = [
   { name = "Adam Brenner", email = "adam.brenner@dell.com" },
-  { name = "Michael Horgan", email = "mike.horgan1@dell.com" }
+  { name = "Michael Horgan", email = "mike.horgan1@dell.com" },
+  { name = "Sanne Bloemsma", email = "sanne.bloemsma@dell.com" }
 ]
 keywords = ["PowerScale", "OneFS", "Dell"]
 description = "An open-source python library designed to enhance RAG application performance during data ingestion by skipping files that have already been processed for Dell PowerScale storage."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -28,3 +27,68 @@ license = "MIT"
 Homepage = "https://github.com/dell/powerscale-rag-connector"
 Issues = "https://github.com/dell/powerscale-rag-connector/issues"
 Repository = "https://github.com/dell/powerscale-rag-connector.git"
+
+
+[project.optional-dependencies]
+langchain = [
+  "langchain-core",
+  "langchain-unstructured",
+  "langchain-elasticsearch",
+  "langchain-nvidia-ai-endpoints",
+  "unstructured[pdf,doc,docx,xlsx,pptx,md]",
+]
+llamaindex = [
+  "llama-index",
+  "llama-index-readers-file",
+  "llama-index-embeddings-nvidia",
+  "llama-index-vector-stores-elasticsearch",
+  "unstructured[pdf,doc,docx,xlsx,pptx,md]",
+  "fsspec",
+]
+nvingest = [
+  "nv-ingest-client",
+]
+examples = [
+  "python-dotenv",
+  "langchain-core",
+  "langchain-elasticsearch",
+  "langchain-nvidia-ai-endpoints",
+  "langchain-unstructured",
+  "llama-index",
+  "llama-index-readers-file",
+  "llama-index-embeddings-nvidia",
+  "llama-index-vector-stores-elasticsearch",
+  "unstructured[pdf,doc,docx,xlsx,pptx,md]",
+  "nv-ingest-client",
+]
+# aggregate
+all = [
+  "python-dotenv",
+  "langchain-core",
+  "langchain-elasticsearch",
+  "langchain-nvidia-ai-endpoints",
+  "langchain-unstructured",
+  "llama-index",
+  "llama-index-readers-file",
+  "llama-index-embeddings-nvidia",
+  "llama-index-vector-stores-elasticsearch",
+  "unstructured[pdf,doc,docx,xlsx,pptx,md]",
+  "nv-ingest-client",
+]
+test = [
+  "pytest>=7",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# Correctness and hygiene only. Style-modernization rules (I, UP) are omitted so
+# the public type annotations stay stable for consumers on older type checkers.
+select = ["E", "F", "W", "B", "C4"]
+ignore = ["E501"]  # line length is not enforced; see line-length above

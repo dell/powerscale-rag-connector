@@ -1,0 +1,12 @@
+python-dotenv
+langchain-core
+langchain-elasticsearch
+langchain-nvidia-ai-endpoints
+langchain-unstructured
+llama-index==0.14.12
+llama-index-readers-file
+llama-index-embeddings-nvidia
+llama-index-vector-stores-elasticsearch
+unstructured[pdf]
+nv-ingest-client==25.9.0
+powerscale_rag_connector==2.0.0
