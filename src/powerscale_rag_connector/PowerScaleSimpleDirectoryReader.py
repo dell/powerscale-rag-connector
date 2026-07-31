@@ -81,6 +81,12 @@ class PowerScaleSimpleDirectoryReader(SimpleDirectoryReader):
                 and the checkpoint is not advanced, so the run can be retried. If False (default),
                 errors are logged and skipped; the checkpoint still advances after the run completes.
             fs: (optional, inherited) File system to use. Defaults to local.
+
+        Note:
+            LlamaIndex's ``SimpleDirectoryReader`` validates file existence via ``fs.isfile()``
+            before loading. If any selected file is missing (e.g., deleted between MetadataIQ
+            query and load), the entire batch will fail with ``ValueError`` regardless of
+            ``raise_on_error``. This is a limitation of the upstream reader.
         """
         # Normalize paths for consistent representation.
         norm_input_dir = os.path.normpath(input_dir) if input_dir is not None else None
